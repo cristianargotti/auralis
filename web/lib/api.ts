@@ -33,6 +33,25 @@ export async function apiFetch(
     });
 }
 
+/**
+ * Typed API helper — wraps apiFetch with JSON parsing.
+ */
+export async function api<T = unknown>(
+    path: string,
+    options: RequestInit = {}
+): Promise<T> {
+    const headers = new Headers(options.headers);
+    if (options.body && typeof options.body === "string") {
+        headers.set("Content-Type", "application/json");
+    }
+    const res = await apiFetch(path, { ...options, headers });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `API error: ${res.status}`);
+    }
+    return res.json() as Promise<T>;
+}
+
 // ── EAR Layer ──────────────────────────────────────────
 
 export async function uploadTrack(file: File) {

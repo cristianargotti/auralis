@@ -4,9 +4,12 @@ from fastapi import Depends, FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from auralis.api.auth import get_current_user, login
+from auralis.api.routes.brain import router as brain_router
 from auralis.api.routes.console import router as console_router
 from auralis.api.routes.ear import router as ear_router
 from auralis.api.routes.gpu import router as gpu_router
+from auralis.api.routes.grid import router as grid_router
+from auralis.api.routes.hands import router as hands_router
 from auralis.api.websocket import websocket_endpoint
 
 app = FastAPI(
@@ -41,6 +44,21 @@ app.include_router(
 )
 app.include_router(
     console_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    hands_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    grid_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    brain_router,
     prefix="/api",
     dependencies=[Depends(get_current_user)],
 )
@@ -83,13 +101,17 @@ async def info() -> dict[str, object]:
             "auth_login": "POST /api/auth/login",
             "ear_upload": "POST /api/ear/upload",
             "ear_analyze": "POST /api/ear/analyze/{project_id}",
-            "ear_status": "GET /api/ear/status/{job_id}",
             "console_master": "POST /api/console/master/{project_id}",
             "console_qc": "GET /api/console/qc/{project_id}",
-            "console_presets": "GET /api/console/presets",
+            "hands_synth": "POST /api/hands/synth",
+            "hands_presets": "GET /api/hands/presets",
+            "grid_arrangement": "POST /api/grid/arrangement",
+            "grid_scales": "GET /api/grid/scales",
+            "brain_plan": "POST /api/brain/plan",
+            "brain_render": "POST /api/brain/render",
+            "brain_chat": "POST /api/brain/chat",
+            "brain_status": "GET /api/brain/status",
             "gpu_status": "GET /api/gpu/status",
-            "gpu_start": "POST /api/gpu/start",
-            "gpu_stop": "POST /api/gpu/stop",
             "websocket": "WS /ws/{project_id}",
         },
     }

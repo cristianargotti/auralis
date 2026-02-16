@@ -24,10 +24,10 @@ interface SystemStatus {
 export default function DashboardPage() {
     const [status, setStatus] = useState<SystemStatus>({
         ear: true,
-        hands: false,
+        hands: true,
         console: true,
-        grid: false,
-        brain: false,
+        grid: true,
+        brain: true,
     });
     const [time, setTime] = useState("");
 
