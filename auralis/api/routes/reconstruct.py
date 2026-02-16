@@ -163,12 +163,29 @@ async def start_reconstruction(req: ReconstructRequest) -> dict[str, Any]:
     return _reconstruct_jobs[job_id]
 
 
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively convert numpy types to native Python for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
+
 @router.get("/status/{job_id}")
 async def get_reconstruction_status(job_id: str) -> dict[str, Any]:
     """Get the current status of a reconstruction job."""
     if job_id not in _reconstruct_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _reconstruct_jobs[job_id]
+    return _sanitize_for_json(_reconstruct_jobs[job_id])
 
 
 @router.get("/compare/{project_id}")
@@ -176,7 +193,7 @@ async def get_comparison(project_id: str) -> dict[str, Any]:
     """Get A/B comparison results for a project."""
     for job in _reconstruct_jobs.values():
         if job["project_id"] == project_id and job["status"] == "completed":
-            return job.get("result", {})
+            return _sanitize_for_json(job.get("result", {}))
     raise HTTPException(status_code=404, detail="No completed reconstruction found")
 
 
