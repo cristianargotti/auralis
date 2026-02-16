@@ -25,7 +25,7 @@ export default function DashboardPage() {
     const [status, setStatus] = useState<SystemStatus>({
         ear: true,
         hands: false,
-        console: false,
+        console: true,
         grid: false,
         brain: false,
     });
@@ -83,8 +83,8 @@ export default function DashboardPage() {
                             <div
                                 key={layer.key}
                                 className={`rounded-xl p-4 text-center transition-all duration-300 ${layer.ready
-                                        ? "bg-primary/8 border border-primary/20 glow-cyan"
-                                        : "bg-secondary/50 border border-border/20"
+                                    ? "bg-primary/8 border border-primary/20 glow-cyan"
+                                    : "bg-secondary/50 border border-border/20"
                                     }`}
                             >
                                 <span className="text-2xl">{layer.icon}</span>

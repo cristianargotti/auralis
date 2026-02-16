@@ -33,9 +33,8 @@ export async function apiFetch(
     });
 }
 
-/**
- * Upload a file to the EAR layer.
- */
+// ── EAR Layer ──────────────────────────────────────────
+
 export async function uploadTrack(file: File) {
     const formData = new FormData();
     formData.append("file", file);
@@ -58,9 +57,6 @@ export async function uploadTrack(file: File) {
     }>;
 }
 
-/**
- * Start analysis pipeline for an uploaded project.
- */
 export async function startAnalysis(projectId: string) {
     const res = await apiFetch(`/api/ear/analyze/${projectId}`, {
         method: "POST",
@@ -77,9 +73,6 @@ export async function startAnalysis(projectId: string) {
     }>;
 }
 
-/**
- * Poll job status.
- */
 export async function getJobStatus(jobId: string) {
     const res = await apiFetch(`/api/ear/status/${jobId}`);
     if (!res.ok) throw new Error("Status check failed");
@@ -94,29 +87,123 @@ export async function getJobStatus(jobId: string) {
     }>;
 }
 
-/**
- * Get GPU instance status.
- */
+// ── GPU Manager ────────────────────────────────────────
+
 export async function getGpuStatus() {
     const res = await apiFetch("/api/gpu/status");
     if (!res.ok) throw new Error("GPU status check failed");
     return res.json();
 }
 
-/**
- * Start GPU instance.
- */
 export async function startGpu() {
     const res = await apiFetch("/api/gpu/start", { method: "POST" });
     if (!res.ok) throw new Error("GPU start failed");
     return res.json();
 }
 
-/**
- * Stop GPU instance.
- */
 export async function stopGpu() {
     const res = await apiFetch("/api/gpu/stop", { method: "POST" });
     if (!res.ok) throw new Error("GPU stop failed");
     return res.json();
+}
+
+// ── Console (Mastering + QC) ───────────────────────────
+
+export interface MasterResult {
+    status: string;
+    output: string;
+    peak_dbtp: number;
+    rms_db: number;
+    est_lufs: number;
+    clipping_samples: number;
+    stages: string[];
+    error?: string;
+}
+
+export interface QCResult {
+    status: string;
+    pass_fail: string;
+    issues: string[];
+    dynamics: {
+        peak_db: number;
+        rms_db: number;
+        crest_factor_db: number;
+        dynamic_range_db: number;
+    };
+    clipping: {
+        is_clipping: boolean;
+        clipped_samples: number;
+    };
+    stereo: {
+        correlation: number;
+        width: number;
+        mono_compatible: boolean;
+    } | null;
+    loudness: {
+        integrated_lufs: number;
+        true_peak_dbtp: number;
+    } | null;
+    spectrum: {
+        sub: number;
+        bass: number;
+        low_mid: number;
+        mid: number;
+        upper_mid: number;
+        presence: number;
+        brilliance: number;
+    };
+    error?: string;
+}
+
+export interface PresetConfig {
+    target_lufs: number;
+    drive: number;
+    width: number;
+    ceiling_db: number;
+}
+
+export async function masterTrack(
+    projectId: string,
+    preset: string = "streaming",
+    overrides?: { target_lufs?: number; drive?: number; width?: number }
+): Promise<MasterResult> {
+    const params = new URLSearchParams({ preset });
+    if (overrides?.target_lufs != null) params.set("target_lufs", String(overrides.target_lufs));
+    if (overrides?.drive != null) params.set("drive", String(overrides.drive));
+    if (overrides?.width != null) params.set("width", String(overrides.width));
+
+    const res = await apiFetch(`/api/console/master/${projectId}?${params}`, {
+        method: "POST",
+    });
+    if (!res.ok) throw new Error("Mastering failed");
+    return res.json();
+}
+
+export async function runQC(projectId: string): Promise<QCResult> {
+    const res = await apiFetch(`/api/console/qc/${projectId}`);
+    if (!res.ok) throw new Error("QC analysis failed");
+    return res.json();
+}
+
+export async function getPresets(): Promise<Record<string, PresetConfig>> {
+    const res = await apiFetch("/api/console/presets");
+    if (!res.ok) throw new Error("Failed to load presets");
+    return res.json();
+}
+
+/**
+ * Get visualization image URL (returns authenticated URL).
+ */
+export function getVizUrl(type: string, projectId: string): string {
+    return `${API_BASE}/api/console/viz/${type}/${projectId}`;
+}
+
+/**
+ * Fetch a visualization image as a blob URL for display.
+ */
+export async function fetchVizImage(type: string, projectId: string): Promise<string> {
+    const res = await apiFetch(`/api/console/viz/${type}/${projectId}`);
+    if (!res.ok) throw new Error(`Visualization ${type} failed`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
 }

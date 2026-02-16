@@ -1,4 +1,4 @@
-"""API routes for Console (mastering) and QC analysis."""
+"""API routes for Console (mastering), QC analysis, and visualization."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi.responses import Response
 
 from auralis.console.mastering import PRESETS, MasterConfig, master_audio
 from auralis.console.qc import compare_tracks, run_qc
@@ -13,6 +14,19 @@ from auralis.console.qc import compare_tracks, run_qc
 router = APIRouter(prefix="/console", tags=["console"])
 
 PROJECTS_DIR = Path("/app/projects")
+
+
+def _find_audio(project_dir: Path, prefer_master: bool = False) -> Path | None:
+    """Find audio file in project directory."""
+    if prefer_master:
+        masters = list(project_dir.glob("*_MASTER.wav"))
+        if masters:
+            return masters[0]
+    for ext in (".wav", ".flac", ".mp3", ".aif"):
+        files = [f for f in project_dir.glob(f"*{ext}") if "_MASTER" not in f.stem]
+        if files:
+            return files[0]
+    return None
 
 
 @router.post("/master/{project_id}")
@@ -28,18 +42,10 @@ async def master_track(
     if not project_dir.exists():
         return {"error": f"Project {project_id} not found"}
 
-    # Find audio file
-    audio = None
-    for ext in (".wav", ".flac", ".mp3", ".aif"):
-        files = list(project_dir.glob(f"*{ext}"))
-        if files:
-            audio = files[0]
-            break
-
+    audio = _find_audio(project_dir)
     if audio is None:
         return {"error": "No audio file found in project"}
 
-    # Build config from preset + overrides
     config = PRESETS.get(preset, MasterConfig())
     if target_lufs is not None:
         config.target_lufs = target_lufs
@@ -72,18 +78,10 @@ async def qc_track(project_id: str) -> dict[str, object]:
     if not project_dir.exists():
         return {"error": f"Project {project_id} not found"}
 
-    # Prefer master, fall back to original
     master = list(project_dir.glob("*_MASTER.wav"))
-    if master:
-        target = master[0]
-    else:
-        for ext in (".wav", ".flac"):
-            files = list(project_dir.glob(f"*{ext}"))
-            if files:
-                target = files[0]
-                break
-        else:
-            return {"error": "No audio file found"}
+    target = master[0] if master else _find_audio(project_dir)
+    if target is None:
+        return {"error": "No audio file found"}
 
     report = await asyncio.to_thread(run_qc, str(target))
 
@@ -142,3 +140,115 @@ async def list_presets() -> dict[str, object]:
         }
         for name, c in PRESETS.items()
     }
+
+
+# ── Visualization Endpoints ─────────────────────────────
+
+
+@router.get("/viz/spectrum/{project_id}")
+async def viz_spectrum(project_id: str) -> Response:
+    """Generate 7-band spectrum comparison image (original vs master)."""
+    from auralis.console.visualize import generate_spectrum_comparison
+
+    project_dir = PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        return Response(content=b"Project not found", status_code=404)
+
+    original = _find_audio(project_dir)
+    master = list(project_dir.glob("*_MASTER.wav"))
+    if not original or not master:
+        return Response(content=b"Need both original and master", status_code=404)
+
+    png = await asyncio.to_thread(
+        generate_spectrum_comparison, str(original), str(master[0]),
+        "Original", "Master"
+    )
+    return Response(content=png, media_type="image/png")
+
+
+@router.get("/viz/spectrogram/{project_id}")
+async def viz_spectrogram(project_id: str) -> Response:
+    """Generate mel spectrogram comparison image."""
+    from auralis.console.visualize import generate_spectrogram_comparison
+
+    project_dir = PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        return Response(content=b"Project not found", status_code=404)
+
+    original = _find_audio(project_dir)
+    master = list(project_dir.glob("*_MASTER.wav"))
+    if not original or not master:
+        return Response(content=b"Need both original and master", status_code=404)
+
+    png = await asyncio.to_thread(
+        generate_spectrogram_comparison, str(original), str(master[0])
+    )
+    return Response(content=png, media_type="image/png")
+
+
+@router.get("/viz/waveform/{project_id}")
+async def viz_waveform(project_id: str) -> Response:
+    """Generate waveform comparison image."""
+    from auralis.console.visualize import generate_waveform_comparison
+
+    project_dir = PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        return Response(content=b"Project not found", status_code=404)
+
+    original = _find_audio(project_dir)
+    master = list(project_dir.glob("*_MASTER.wav"))
+    if not original or not master:
+        return Response(content=b"Need both original and master", status_code=404)
+
+    png = await asyncio.to_thread(
+        generate_waveform_comparison, str(original), str(master[0])
+    )
+    return Response(content=png, media_type="image/png")
+
+
+@router.get("/viz/radar/{project_id}")
+async def viz_radar(project_id: str) -> Response:
+    """Generate QC radar chart image."""
+    from auralis.console.visualize import generate_qc_radar
+
+    project_dir = PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        return Response(content=b"Project not found", status_code=404)
+
+    master = list(project_dir.glob("*_MASTER.wav"))
+    target = master[0] if master else _find_audio(project_dir)
+    if target is None:
+        return Response(content=b"No audio file found", status_code=404)
+
+    report = await asyncio.to_thread(run_qc, str(target))
+
+    png = await asyncio.to_thread(
+        generate_qc_radar,
+        report.dynamics.peak_db, report.dynamics.rms_db,
+        report.dynamics.crest_factor_db,
+        report.stereo.correlation if report.stereo else 0.5,
+        report.stereo.width if report.stereo else 0.3,
+        report.loudness.integrated_lufs if report.loudness else -14,
+        report.dynamics.dynamic_range_db,
+    )
+    return Response(content=png, media_type="image/png")
+
+
+@router.get("/viz/loudness/{project_id}")
+async def viz_loudness(project_id: str) -> Response:
+    """Generate loudness timeline image."""
+    from auralis.console.visualize import generate_loudness_timeline
+
+    project_dir = PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        return Response(content=b"Project not found", status_code=404)
+
+    master = list(project_dir.glob("*_MASTER.wav"))
+    target = master[0] if master else _find_audio(project_dir)
+    if target is None:
+        return Response(content=b"No audio file found", status_code=404)
+
+    png = await asyncio.to_thread(
+        generate_loudness_timeline, str(target), "Master"
+    )
+    return Response(content=png, media_type="image/png")
