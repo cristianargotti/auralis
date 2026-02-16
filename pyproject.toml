@@ -42,7 +42,8 @@ dependencies = [
 [project.optional-dependencies]
 # Heavy ML deps — installed on EC2 with GPU
 ml = [
-    "torch>=2.0",
+    "torch>=2.0,<2.7",
+    "torchaudio>=2.0,<2.7",
     "demucs>=4.0",
 ]
 # Synthesis & Effects — need system libs
@@ -120,4 +121,5 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
 
