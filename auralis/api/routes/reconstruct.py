@@ -17,6 +17,7 @@ import numpy as np
 import soundfile as sf
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from auralis.config import settings
@@ -195,6 +196,70 @@ async def get_comparison(project_id: str) -> dict[str, Any]:
         if job["project_id"] == project_id and job["status"] == "completed":
             return _sanitize_for_json(job.get("result", {}))
     raise HTTPException(status_code=404, detail="No completed reconstruction found")
+
+
+@router.get("/waveform/{job_id}")
+async def get_waveform_data(job_id: str) -> dict[str, Any]:
+    """Get interactive waveform data (X-Ray layers) for a job."""
+    if job_id not in _reconstruct_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = _reconstruct_jobs[job_id]
+    project_id = job["project_id"]
+    # We need settings to locate project dir. Assuming standard path structure:
+    # /app/projects/{project_id}
+    # But wait, we don't have settings imported here easily? 
+    # Actually we can reconstruct path or use job result if it has path?
+    # Let's import settings or use hardcoded /app/projects for now since we know docker volume structure.
+    # Actually better: use settings if available.
+    
+    # Let's use Path("/app/projects") / project_id or check if job has path info
+    project_dir = Path("/app/projects") / project_id
+    
+    if not project_dir.exists():
+         raise HTTPException(status_code=404, detail="Project files not found")
+
+    try:
+        from auralis.ear.analyzer import analyze_track_layers
+        # Run analysis in thread pool to avoid blocking
+        data = await asyncio.to_thread(analyze_track_layers, project_dir)
+        return _sanitize_for_json(data)
+    except ImportError:
+        # Fallback if librosa not installed (shouldn't happen in prod)
+        return {"error": "Audio analysis library not available"}
+    except Exception as e:
+        _log(job, f"Waveform analysis failed: {e}", "error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/audio/{job_id}/{file_key}")
+async def get_audio_file(job_id: str, file_key: str):
+    """Stream audio file (original, mix, stem_*)."""
+    if job_id not in _reconstruct_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = _reconstruct_jobs[job_id]
+    project_id = job["project_id"]
+    project_dir = Path("/app/projects") / project_id
+    
+    file_map = {
+        "original": "original.wav",
+        "mix": "mix.wav",
+        "stem_drums": "stems/drums.wav",
+        "stem_bass": "stems/bass.wav",
+        "stem_other": "stems/other.wav",
+        "stem_vocals": "stems/vocals.wav",
+    }
+    
+    if file_key not in file_map:
+        raise HTTPException(status_code=400, detail="Invalid file key")
+        
+    file_path = project_dir / file_map[file_key]
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+        
+    return FileResponse(file_path, media_type="audio/wav")
+
 
 
 @router.get("/jobs")

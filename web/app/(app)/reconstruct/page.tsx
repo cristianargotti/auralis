@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import WaveformXRay from "@/components/visualizer/WaveformXRay";
 
 /* ── Types (track-agnostic) ──────────────────────────── */
 
@@ -790,6 +791,11 @@ export default function ReconstructPage() {
                         })}
                     </CardContent>
                 </Card>
+            )}
+
+            {/* 🩻 Interactive Waveform X-Ray */}
+            {job?.result?.stem_analysis && (
+                <WaveformXRay jobId={job.job_id} />
             )}
 
             {analysis && (
