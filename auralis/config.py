@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     port: int = 8000
     env: str = "development"
 
+    # Authentication
+    auth_username: str = "admin"
+    auth_password_hash: str = ""  # bcrypt hash (see .env.example)
+    jwt_secret: str = "change-me-in-production-use-openssl-rand"  # noqa: S105
+
     # OpenAI
     openai_api_key: str = ""
 

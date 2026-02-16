@@ -1,8 +1,9 @@
 """AURALIS FastAPI server — main application."""
 
-from fastapi import FastAPI, WebSocket
+from fastapi import Depends, FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
+from auralis.api.auth import get_current_user, login
 from auralis.api.routes.ear import router as ear_router
 from auralis.api.websocket import websocket_endpoint
 
@@ -22,8 +23,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register route modules
-app.include_router(ear_router, prefix="/api")
+# ── Auth endpoint (public) ──
+app.post("/api/auth/login", tags=["auth"])(login)
+
+# ── Protected routes — require valid JWT ──
+app.include_router(
+    ear_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
 
 
 # WebSocket endpoint
@@ -33,6 +41,7 @@ async def ws_endpoint(websocket: WebSocket, project_id: str) -> None:
     await websocket_endpoint(websocket, project_id)
 
 
+# ── Public routes ──
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Health check endpoint."""
@@ -59,6 +68,7 @@ async def info() -> dict[str, object]:
         "endpoints": {
             "docs": "/docs",
             "health": "/health",
+            "auth_login": "POST /api/auth/login",
             "ear_upload": "POST /api/ear/upload",
             "ear_analyze": "POST /api/ear/analyze/{project_id}",
             "ear_status": "GET /api/ear/status/{job_id}",

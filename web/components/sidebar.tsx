@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 
 const NAV_ITEMS = [
     {
@@ -50,6 +51,7 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
     const pathname = usePathname();
+    const { logout } = useAuth();
 
     return (
         <aside className="glass-strong flex w-[220px] shrink-0 flex-col border-r border-border/50">
@@ -79,8 +81,8 @@ export function Sidebar() {
                             key={item.href}
                             href={item.href}
                             className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all duration-200 ${isActive
-                                    ? "bg-primary/10 text-primary glow-cyan"
-                                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                ? "bg-primary/10 text-primary glow-cyan"
+                                : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                                 }`}
                         >
                             <span className="text-base">{item.icon}</span>
@@ -97,11 +99,20 @@ export function Sidebar() {
 
             {/* Status footer */}
             <div className="border-t border-border/30 px-4 py-3">
-                <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 rounded-full bg-auralis-emerald animate-pulse-slow" />
-                    <span className="text-[11px] text-muted-foreground">
-                        Engine ready
-                    </span>
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-auralis-emerald animate-pulse-slow" />
+                        <span className="text-[11px] text-muted-foreground">
+                            Engine ready
+                        </span>
+                    </div>
+                    <button
+                        onClick={logout}
+                        className="text-[10px] text-muted-foreground/50 hover:text-destructive transition-colors"
+                        title="Sign out"
+                    >
+                        Sign out
+                    </button>
                 </div>
                 <p className="mt-1 text-[10px] text-muted-foreground/50">
                     Hear deeper. Create beyond.
