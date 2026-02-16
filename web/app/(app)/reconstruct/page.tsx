@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
     Card,
     CardContent,
@@ -24,6 +24,12 @@ interface QCDimensionResult {
     detail: string;
 }
 
+interface LogEntry {
+    ts: string;
+    level: "info" | "success" | "warn" | "error" | "stage";
+    msg: string;
+}
+
 interface ReconstructJob {
     job_id: string;
     project_id: string;
@@ -31,6 +37,7 @@ interface ReconstructJob {
     stage: string;
     progress: number;
     stages: Record<string, StageStatus>;
+    logs?: LogEntry[];
     result: {
         analysis?: {
             bpm: number;
@@ -126,6 +133,8 @@ export default function ReconstructPage() {
     const [lastStageChange, setLastStageChange] = useState<number | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const prevStageRef = useRef<string | null>(null);
+    const [logsOpen, setLogsOpen] = useState(true);
+    const logsEndRef = useRef<HTMLDivElement>(null);
 
     // Elapsed timer
     useEffect(() => {
@@ -150,6 +159,13 @@ export default function ReconstructPage() {
         }
         prevStageRef.current = currentStage;
     }, [job?.stage]);
+
+    // Auto-scroll logs
+    useEffect(() => {
+        if (logsOpen && logsEndRef.current) {
+            logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+        }
+    }, [job?.logs?.length, logsOpen]);
 
     // Poll job status
     useEffect(() => {
@@ -594,6 +610,51 @@ export default function ReconstructPage() {
                             </div>
                         )}
                     </CardContent>
+                </Card>
+            )}
+
+            {/* Live Logs Terminal */}
+            {job && (job.logs?.length ?? 0) > 0 && (
+                <Card className="bg-zinc-950/80 border-zinc-800">
+                    <CardHeader className="pb-2 cursor-pointer" onClick={() => setLogsOpen(!logsOpen)}>
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <span className="text-green-500 font-mono text-sm">▸</span>
+                                <CardTitle className="text-sm font-mono text-zinc-400">Engine Logs</CardTitle>
+                                <Badge variant="outline" className="border-zinc-700 text-zinc-500 text-[10px] font-mono">
+                                    {job.logs?.length ?? 0} lines
+                                </Badge>
+                                {job.status === "running" && (
+                                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                                )}
+                            </div>
+                            <span className="text-zinc-600 text-xs">{logsOpen ? "▾" : "▸"}</span>
+                        </div>
+                    </CardHeader>
+                    {logsOpen && (
+                        <CardContent className="pt-0">
+                            <div className="bg-black/60 rounded-lg border border-zinc-800/50 p-3 max-h-[280px] overflow-y-auto font-mono text-[11px] leading-relaxed scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
+                                {job.logs?.map((log, i) => {
+                                    const color =
+                                        log.level === "success" ? "text-emerald-400"
+                                            : log.level === "error" ? "text-red-400"
+                                                : log.level === "warn" ? "text-amber-400"
+                                                    : log.level === "stage" ? "text-cyan-400 font-bold"
+                                                        : "text-zinc-400";
+                                    return (
+                                        <div key={i} className={`flex gap-2 ${color} ${log.level === "stage" ? "mt-2 mb-0.5" : ""}`}>
+                                            <span className="text-zinc-600 select-none shrink-0">{log.ts}</span>
+                                            <span className={`select-none shrink-0 w-4 text-center ${log.level === "error" ? "text-red-500" : log.level === "warn" ? "text-amber-500" : log.level === "success" ? "text-emerald-500" : log.level === "stage" ? "text-cyan-500" : "text-zinc-600"}`}>
+                                                {log.level === "error" ? "✗" : log.level === "warn" ? "!" : log.level === "success" ? "✓" : log.level === "stage" ? "▸" : "·"}
+                                            </span>
+                                            <span className="break-all">{log.msg}</span>
+                                        </div>
+                                    );
+                                })}
+                                <div ref={logsEndRef} />
+                            </div>
+                        </CardContent>
+                    )}
                 </Card>
             )}
 

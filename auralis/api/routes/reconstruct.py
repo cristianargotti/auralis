@@ -24,6 +24,16 @@ router = APIRouter(prefix="/reconstruct", tags=["reconstruct"])
 _reconstruct_jobs: dict[str, dict[str, Any]] = {}
 
 
+def _log(job: dict[str, Any], msg: str, level: str = "info") -> None:
+    """Append a timestamped log entry to a job."""
+    from datetime import datetime, timezone
+    job.setdefault("logs", []).append({
+        "ts": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        "level": level,
+        "msg": msg,
+    })
+
+
 class ReconstructRequest(BaseModel):
     """Request to reconstruct a reference track."""
 
@@ -139,8 +149,11 @@ async def start_reconstruction(req: ReconstructRequest) -> dict[str, Any]:
             "console": {"status": "pending", "message": ""},
             "qc": {"status": "pending", "message": ""},
         },
+        "logs": [],
         "result": None,
     }
+    _log(_reconstruct_jobs[job_id], f"Pipeline started — project {req.project_id}", "info")
+    _log(_reconstruct_jobs[job_id], f"Mode: {req.mode} | Separator: {req.separator}", "info")
 
     asyncio.create_task(_run_reconstruction(job_id, req))
 
@@ -197,6 +210,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         job["stage"] = "ear"
         job["stages"]["ear"]["status"] = "running"
         job["progress"] = 5
+        _log(job, "── STAGE 1: EAR ──", "stage")
+        _log(job, "Searching for uploaded audio file...")
 
         # Check for uploaded audio
         audio_file = _find_audio_file(project_dir)
@@ -204,7 +219,9 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         sep_result = None
 
         if audio_file:
+            _log(job, f"Found: {audio_file.name} ({audio_file.stat().st_size / 1024 / 1024:.1f} MB)")
             job["stages"]["ear"]["message"] = f"Separating stems from {audio_file.name}..."
+            _log(job, f"Starting stem separation (model: {req.separator})...")
 
             # Run separation (Mel-RoFormer primary, HTDemucs fallback)
             stems_dir = project_dir / "stems"
@@ -219,15 +236,19 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 job["stages"]["ear"]["message"] = (
                     f"Separated {len(sep_result.stems)} stems via {sep_result.model_used}"
                 )
+                _log(job, f"✓ Separated {len(sep_result.stems)} stems via {sep_result.model_used}", "success")
             except ImportError:
                 job["stages"]["ear"]["message"] = (
                     "Separation models not installed — using analysis only"
                 )
+                _log(job, "Separation models not installed — analysis only", "warn")
             except Exception as e:
                 job["stages"]["ear"]["message"] = f"Separation error: {e}"
+                _log(job, f"Separation error: {e}", "error")
 
             # Run profiler
             job["stages"]["ear"]["message"] = "Profiling track DNA..."
+            _log(job, "Running track profiler (BPM, key, sections, energy)...")
             try:
                 from auralis.ear.profiler import profile_track
 
@@ -235,12 +256,16 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 analysis = dna.to_dict()
                 analysis_path = project_dir / "analysis.json"
                 analysis_path.write_text(json.dumps(analysis, indent=2, default=str))
+                _log(job, f"✓ Profile complete — {analysis.get('tempo', '?')} BPM, {analysis.get('key', '?')} {analysis.get('scale', '')}", "success")
+                _log(job, f"  Sections: {len(analysis.get('sections', []))} | Duration: {analysis.get('duration', 0):.1f}s")
             except Exception as e:
                 analysis = {"error": str(e)}
+                _log(job, f"Profiler error: {e}", "error")
 
             # Run MIDI extraction on tonal stems
             if sep_result and stems_dir.exists():
                 job["stages"]["ear"]["message"] = "Extracting MIDI from stems..."
+                _log(job, "Extracting MIDI from tonal stems (basic-pitch)...")
                 try:
                     from auralis.ear.midi_extractor import extract_midi_from_stems
 
@@ -252,10 +277,13 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     analysis["midi_stems"] = {
                         k: v.to_dict() for k, v in midi_results.items()
                     }
+                    _log(job, f"✓ MIDI extracted from {len(midi_results)} stems", "success")
                 except ImportError:
                     analysis["midi_stems"] = {"error": "basic-pitch not installed"}
+                    _log(job, "basic-pitch not installed — skipping MIDI", "warn")
                 except Exception as e:
                     analysis["midi_stems"] = {"error": str(e)}
+                    _log(job, f"MIDI extraction error: {e}", "error")
         else:
             analysis_file = project_dir / "analysis.json"
             if analysis_file.exists():
@@ -267,11 +295,14 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         await asyncio.sleep(0.1)
         job["stages"]["ear"]["status"] = "completed"
         job["progress"] = 20
+        _log(job, "✓ EAR stage complete", "success")
 
         # Stage 2: PLAN — Auto-detect structure
         job["stage"] = "plan"
         job["stages"]["plan"]["status"] = "running"
         job["stages"]["plan"]["message"] = "Auto-detecting track structure..."
+        _log(job, "── STAGE 2: BRAIN ──", "stage")
+        _log(job, "Building track plan from analysis data...")
 
         plan = {
             "bpm": analysis.get("tempo", 120.0),
@@ -289,11 +320,14 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
             f"BPM: {plan['bpm']:.1f} | Key: {plan['key']} {plan['scale']}"
         )
         job["progress"] = 35
+        _log(job, f"✓ Plan: {plan['total_sections']} sections, {plan['bpm']:.1f} BPM, {plan['key']} {plan['scale']}", "success")
 
         # Stage 3: GRID — MIDI pattern mapping (REAL)
         job["stage"] = "grid"
         job["stages"]["grid"]["status"] = "running"
         job["stages"]["grid"]["message"] = "Loading MIDI patterns from extracted data..."
+        _log(job, "── STAGE 3: GRID ──", "stage")
+        _log(job, "Loading MIDI patterns from extracted data...")
 
         midi_data = analysis.get("midi_stems", {})
         midi_patterns: dict[str, Any] = {}
@@ -339,11 +373,17 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         job["stages"]["grid"]["status"] = "completed"
         job["stages"]["grid"]["message"] = f"Mapped {len(midi_patterns)} MIDI tracks"
         job["progress"] = 50
+        for name, info in midi_patterns.items():
+            notes = info.get('notes', '?')
+            _log(job, f"  {name}: {notes} notes")
+        _log(job, f"✓ GRID complete — {len(midi_patterns)} tracks mapped", "success")
 
         # Stage 4: HANDS — Synthesis / Stem passthrough (REAL)
         job["stage"] = "hands"
         job["stages"]["hands"]["status"] = "running"
         job["stages"]["hands"]["message"] = "Synthesizing / preparing stems..."
+        _log(job, "── STAGE 4: HANDS ──", "stage")
+        _log(job, "Preparing stems for reconstruction...")
 
         stems_dir = project_dir / "stems"
         rendered_dir = project_dir / "rendered"
@@ -362,6 +402,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     job["stages"]["hands"]["message"] = (
                         f"Processing stem: {stem_name} ({i + 1}/{len(stem_files)})"
                     )
+                    _log(job, f"Processing: {stem_name} ({i + 1}/{len(stem_files)})...")
 
                     # Copy stem to rendered dir (with optional FX processing)
                     rendered_path = rendered_dir / f"{stem_name}.wav"
@@ -409,11 +450,14 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         job["stages"]["hands"]["status"] = "completed"
         job["stages"]["hands"]["message"] = f"Rendered {len(rendered_stems)} stems"
         job["progress"] = 70
+        _log(job, f"✓ HANDS complete — {len(rendered_stems)} stems rendered", "success")
 
         # Stage 5: CONSOLE — Mix + Master (REAL)
         job["stage"] = "console"
         job["stages"]["console"]["status"] = "running"
         job["stages"]["console"]["message"] = "Mixing stems..."
+        _log(job, "── STAGE 5: CONSOLE ──", "stage")
+        _log(job, f"Mixing {len(rendered_stems)} stems...")
 
         mix_path = project_dir / "mix.wav"
         master_path = project_dir / "master.wav"
@@ -442,6 +486,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     job["stages"]["console"]["message"] = (
                         f"Mixed {mix_result.tracks_mixed} tracks → mastering..."
                     )
+                    _log(job, f"✓ Mixed {mix_result.tracks_mixed} tracks", "success")
                 except (ImportError, Exception) as e:
                     # Fallback: quick sum mix
                     all_audio = []
@@ -463,6 +508,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 # Master by reference
                 if mix_path.exists():
                     job["stages"]["console"]["message"] = "Mastering by reference..."
+                    _log(job, f"Mastering by reference (target LUFS: {analysis.get('integrated_lufs', -14.0)})...")
                     try:
                         from auralis.console.mastering import master_audio, MasterConfig
 
@@ -483,6 +529,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                             "est_lufs": m_result.est_lufs,
                             "stages_applied": m_result.stages_applied,
                         }
+                        _log(job, f"✓ Master: {m_result.est_lufs:.1f} LUFS | Peak: {m_result.peak_dbtp:.1f} dBTP", "success")
+                        _log(job, f"  Stages: {', '.join(m_result.stages_applied)}")
                     except (ImportError, Exception) as e:
                         master_info = {"error": str(e), "mix_path": str(mix_path)}
                         master_path = mix_path  # Use mix as "master"
@@ -498,11 +546,14 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
             f"Master complete — LUFS: {master_info.get('est_lufs', 'N/A')}"
         )
         job["progress"] = 85
+        _log(job, "✓ CONSOLE complete", "success")
 
         # Stage 6: QC — 12-dimension comparison (REAL)
         job["stage"] = "qc"
         job["stages"]["qc"]["status"] = "running"
         job["stages"]["qc"]["message"] = "Running 12-dimension quality comparison..."
+        _log(job, "── STAGE 6: QC ──", "stage")
+        _log(job, "Running 12-dimension A/B comparison...")
 
         qc_result: dict[str, Any] = {
             "dimensions": {},
@@ -530,6 +581,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     f"{'✅ PASSED' if qc_result.get('passed') else '⚠️ Below target'} | "
                     f"Weakest: {qc_result.get('weakest', 'N/A')}"
                 )
+                _log(job, f"QC Score: {qc_result['overall_score']:.1f}% — {'PASSED ✅' if qc_result.get('passed') else 'BELOW TARGET ⚠️'}", "success" if qc_result.get('passed') else "warn")
+                _log(job, f"  Weakest: {qc_result.get('weakest', 'N/A')} | Strongest: {qc_result.get('strongest', 'N/A')}")
             except (ImportError, Exception) as e:
                 qc_result["error"] = str(e)
                 job["stages"]["qc"]["message"] = f"QC comparison error: {e}"
@@ -544,6 +597,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
 
         # Complete
         job["status"] = "completed"
+        _log(job, "═══════════════════════════════════", "stage")
+        _log(job, f"✓ Pipeline complete — {len(rendered_stems)} stems, QC: {qc_result.get('overall_score', 0):.1f}%", "success")
         job["result"] = {
             "analysis": {
                 "bpm": plan["bpm"],
@@ -568,6 +623,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         job["status"] = "error"
         job["stages"][job["stage"]]["status"] = "error"
         job["stages"][job["stage"]]["message"] = str(e)
+        _log(job, f"FATAL: {e}", "error")
 
 
 def _find_audio_file(project_dir: Path) -> Path | None:
