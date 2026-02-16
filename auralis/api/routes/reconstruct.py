@@ -234,11 +234,16 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         sep_result = None
 
         if audio_file:
-            _log(job, f"Found: {audio_file.name} ({audio_file.stat().st_size / 1024 / 1024:.1f} MB)")
-            job["stages"]["ear"]["message"] = f"Separating stems from {audio_file.name}..."
-            _log(job, f"Starting stem separation (model: {req.separator})...")
-            _log(job, "Loading HTDemucs Fine-Tuned model (may download ~320MB on first run)...")
-            job["stages"]["ear"]["message"] = "Loading ML model & separating stems (CPU, ~5 min)..."
+            # Check if models are cached to show correct message
+            model_cache_dir = Path("/root/.cache/torch/hub/checkpoints")
+            if model_cache_dir.exists() and any(model_cache_dir.iterdir()):
+                _log(job, f"Using cached HTDemucs model (instant load)...")
+                job["stages"]["ear"]["message"] = "Model loaded from cache. Starting separation (CPU, ~5 min)..."
+            else:
+                _log(job, "Downloading HTDemucs model (~320MB, first run only)...")
+                job["stages"]["ear"]["message"] = "Downloading model & separating (CPU, ~7 min)..."
+
+            _log(job, "Starting separation process...")
 
             # Run separation (Mel-RoFormer primary, HTDemucs fallback)
             stems_dir = project_dir / "stems"
