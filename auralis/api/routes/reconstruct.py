@@ -62,7 +62,7 @@ async def get_analysis(project_id: str) -> dict[str, Any]:
     Returns whatever the profiler auto-detected:
     sections, energy map, BPM, key, spectral profile.
     """
-    project_dir = settings.UPLOAD_DIR / project_id
+    project_dir = settings.projects_dir / project_id
     analysis_file = project_dir / "analysis.json"
 
     if not analysis_file.exists():
@@ -77,7 +77,7 @@ async def get_analysis(project_id: str) -> dict[str, Any]:
 @router.get("/stems/{project_id}")
 async def get_stems(project_id: str) -> dict[str, Any]:
     """Get the separated stems info for a project."""
-    project_dir = settings.UPLOAD_DIR / project_id
+    project_dir = settings.projects_dir / project_id
     stems_meta = project_dir / "stems" / "separation_metadata.json"
 
     if not stems_meta.exists():
@@ -92,7 +92,7 @@ async def get_stems(project_id: str) -> dict[str, Any]:
 @router.get("/midi/{project_id}")
 async def get_midi(project_id: str) -> dict[str, Any]:
     """Get extracted MIDI data for a project."""
-    project_dir = settings.UPLOAD_DIR / project_id
+    project_dir = settings.projects_dir / project_id
     midi_meta = project_dir / "midi" / "midi_extraction_metadata.json"
 
     if not midi_meta.exists():
@@ -198,7 +198,7 @@ async def list_jobs() -> list[dict[str, Any]]:
 async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
     """Execute the full reconstruction pipeline from any uploaded track."""
     job = _reconstruct_jobs[job_id]
-    project_dir = settings.UPLOAD_DIR / req.project_id
+    project_dir = settings.projects_dir / req.project_id
 
     try:
         # Stage 1: EAR — Separate + Profile
