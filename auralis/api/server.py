@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from auralis.api.auth import get_current_user, login
 from auralis.api.routes.ear import router as ear_router
+from auralis.api.routes.gpu import router as gpu_router
 from auralis.api.websocket import websocket_endpoint
 
 app = FastAPI(
@@ -29,6 +30,11 @@ app.post("/api/auth/login", tags=["auth"])(login)
 # ── Protected routes — require valid JWT ──
 app.include_router(
     ear_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    gpu_router,
     prefix="/api",
     dependencies=[Depends(get_current_user)],
 )
