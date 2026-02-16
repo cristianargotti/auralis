@@ -315,6 +315,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     except Exception:
                         stem_analysis[stem_name] = {"error": "analysis failed"}
 
+                if job["result"] is None:
+                    job["result"] = {}
                 job["result"]["stem_analysis"] = stem_analysis  # type: ignore[index]
                 _log(job, f"✓ Analyzed {len(stem_analysis)} stems", "success")
             except ImportError:
