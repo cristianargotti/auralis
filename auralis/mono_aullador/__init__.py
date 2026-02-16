@@ -1,18 +1,11 @@
-"""Mono Aullador — Track reconstruction & benchmark module.
+"""Mono Aullador — Track reconstruction engine.
 
-This module contains:
-- million_pieces.py: Complete DNA blueprint of the reference track
-- Future: reconstruction engine, A/B comparison tools
+This module will contain:
+- Reconstruction orchestrator
+- Timbre matching (TokenSynth, RAVE)
+- A/B comparison tools
+- Quality scoring (12 dimensions + MERT)
+
+NOTE: The reconstruction engine is 100% track-agnostic.
+No hardcoded track references — everything derived from uploaded audio.
 """
-
-from auralis.mono_aullador.million_pieces import (
-    MILLION_PIECES_SECTIONS,
-    get_million_pieces_blueprint,
-    get_reconstruction_config,
-)
-
-__all__ = [
-    "MILLION_PIECES_SECTIONS",
-    "get_million_pieces_blueprint",
-    "get_reconstruction_config",
-]
