@@ -5,6 +5,9 @@ services:
       dockerfile: Dockerfile.api
     env_file: .env
     restart: unless-stopped
+    volumes:
+      - ml_models:/root/.cache    # Persist HTDemucs model weights (~320MB)
+      - projects_data:/app/projects  # Persist separated stems & audio
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -40,3 +43,5 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  ml_models:      # HTDemucs + torch hub weights
+  projects_data:  # Stems, renders, mixes
