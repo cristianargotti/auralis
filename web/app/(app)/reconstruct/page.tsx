@@ -117,8 +117,39 @@ export default function ReconstructPage() {
     const [reconstructing, setReconstructing] = useState(false);
     const [selectedSection, setSelectedSection] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
+    const [uploadFile_, setUploadFile_] = useState<{ name: string; size: number } | null>(null);
     const [dragOver, setDragOver] = useState(false);
+    const [elapsed, setElapsed] = useState(0);
+    const [stageTimings, setStageTimings] = useState<Record<string, number>>({});
+    const [pipelineStartTime, setPipelineStartTime] = useState<number | null>(null);
+    const [lastStageChange, setLastStageChange] = useState<number | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const prevStageRef = useRef<string | null>(null);
+
+    // Elapsed timer
+    useEffect(() => {
+        if (!pipelineStartTime || !reconstructing) return;
+        const timer = setInterval(() => {
+            setElapsed(Math.floor((Date.now() - pipelineStartTime) / 1000));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [pipelineStartTime, reconstructing]);
+
+    // Track stage timings
+    useEffect(() => {
+        if (!job || !lastStageChange) return;
+        const currentStage = job.stage;
+        if (prevStageRef.current && prevStageRef.current !== currentStage) {
+            const now = Date.now();
+            setStageTimings((prev) => ({
+                ...prev,
+                [prevStageRef.current!]: Math.floor((now - lastStageChange) / 1000),
+            }));
+            setLastStageChange(now);
+        }
+        prevStageRef.current = currentStage;
+    }, [job?.stage]);
 
     // Poll job status
     useEffect(() => {
@@ -131,7 +162,13 @@ export default function ReconstructPage() {
                 setJob(updated);
                 if (updated.status !== "running") {
                     setReconstructing(false);
-                    // Load analysis after completion
+                    // Capture final stage timing
+                    if (lastStageChange && prevStageRef.current) {
+                        setStageTimings((prev) => ({
+                            ...prev,
+                            [prevStageRef.current!]: Math.floor((Date.now() - lastStageChange) / 1000),
+                        }));
+                    }
                     if (updated.result?.analysis) {
                         loadAnalysis(updated.project_id);
                     }
@@ -148,23 +185,55 @@ export default function ReconstructPage() {
         } catch { /* no analysis yet */ }
     };
 
+    const formatBytes = (bytes: number) => {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+
+    const formatElapsed = (secs: number) => {
+        const m = Math.floor(secs / 60);
+        const s = secs % 60;
+        return m > 0 ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
+    };
+
     const uploadFile = useCallback(async (file: File) => {
         setUploading(true);
+        setUploadProgress(0);
+        setUploadFile_({ name: file.name, size: file.size });
         try {
             const formData = new FormData();
             formData.append("file", file);
             const token = typeof window !== "undefined" ? localStorage.getItem("auralis_token") : null;
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/ear/upload`, {
-                method: "POST",
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
-                body: formData,
+
+            // Use XMLHttpRequest for progress tracking
+            const data = await new Promise<{ project_id: string }>((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open("POST", `${process.env.NEXT_PUBLIC_API_URL || ""}/api/ear/upload`);
+                if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                        setUploadProgress(Math.round((e.loaded / e.total) * 100));
+                    }
+                };
+
+                xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve(JSON.parse(xhr.responseText));
+                    } else {
+                        reject(new Error(`Upload failed: ${xhr.status}`));
+                    }
+                };
+                xhr.onerror = () => reject(new Error("Upload failed"));
+                xhr.send(formData);
             });
-            if (!res.ok) throw new Error("Upload failed");
-            const data = await res.json();
+
             setProjectId(data.project_id);
-            return data.project_id as string;
+            return data.project_id;
         } finally {
             setUploading(false);
+            setUploadProgress(0);
         }
     }, []);
 
@@ -172,6 +241,12 @@ export default function ReconstructPage() {
         const id = pid || projectId.trim();
         if (!id) return;
         setReconstructing(true);
+        setElapsed(0);
+        setStageTimings({});
+        const now = Date.now();
+        setPipelineStartTime(now);
+        setLastStageChange(now);
+        prevStageRef.current = null;
         try {
             const result = await api<ReconstructJob>("/api/reconstruct/start", {
                 method: "POST",
@@ -184,6 +259,7 @@ export default function ReconstructPage() {
             setJob(result);
         } catch {
             setReconstructing(false);
+            setPipelineStartTime(null);
         }
     }, [projectId]);
 
@@ -257,10 +333,12 @@ export default function ReconstructPage() {
                         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                         onDragLeave={() => setDragOver(false)}
                         onDrop={handleDrop}
-                        onClick={() => fileInputRef.current?.click()}
-                        className={`rounded-xl border-2 border-dashed p-8 text-center cursor-pointer transition-all mb-4 ${dragOver
-                                ? "border-amber-500 bg-amber-500/10"
-                                : "border-zinc-700 hover:border-zinc-600 bg-zinc-800/30"
+                        onClick={() => !uploading && fileInputRef.current?.click()}
+                        className={`relative rounded-xl border-2 border-dashed p-8 text-center transition-all mb-4 overflow-hidden ${uploading
+                            ? "border-cyan-500/50 bg-cyan-500/5 cursor-wait"
+                            : dragOver
+                                ? "border-amber-500 bg-amber-500/10 cursor-copy"
+                                : "border-zinc-700 hover:border-zinc-600 bg-zinc-800/30 cursor-pointer"
                             }`}
                     >
                         <input
@@ -270,13 +348,60 @@ export default function ReconstructPage() {
                             onChange={handleFileSelect}
                             className="hidden"
                         />
-                        <div className="text-4xl mb-2">{uploading ? "⏳" : dragOver ? "📥" : "🎵"}</div>
-                        <p className="text-sm text-zinc-300 font-medium">
-                            {uploading ? "Uploading..." : "Drop audio file here or click to browse"}
-                        </p>
-                        <p className="text-[11px] text-zinc-600 mt-1">
-                            WAV, MP3, FLAC, OGG, AAC — auto-runs full reconstruction pipeline
-                        </p>
+
+                        {/* Upload progress bar — fills from left */}
+                        {uploading && (
+                            <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-800">
+                                <div
+                                    className="h-full bg-gradient-to-r from-cyan-500 to-teal-400 transition-all duration-300 ease-out"
+                                    style={{ width: `${uploadProgress}%` }}
+                                />
+                            </div>
+                        )}
+
+                        {uploading ? (
+                            <div className="space-y-3">
+                                {/* Animated spinner */}
+                                <div className="flex justify-center">
+                                    <div className="w-10 h-10 rounded-full border-2 border-cyan-500/30 border-t-cyan-400 animate-spin" />
+                                </div>
+                                {/* File info */}
+                                <div>
+                                    <p className="text-sm text-cyan-300 font-medium">
+                                        Uploading — {uploadProgress}%
+                                    </p>
+                                    {uploadFile_ && (
+                                        <p className="text-[11px] text-zinc-500 mt-1">
+                                            📄 {uploadFile_.name}
+                                            <span className="text-zinc-600 ml-2">{formatBytes(uploadFile_.size)}</span>
+                                        </p>
+                                    )}
+                                </div>
+                                {/* Progress bar (detailed) */}
+                                <div className="max-w-xs mx-auto">
+                                    <div className="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full bg-gradient-to-r from-cyan-500 to-teal-400 rounded-full transition-all duration-300"
+                                            style={{ width: `${uploadProgress}%` }}
+                                        />
+                                    </div>
+                                    <div className="flex justify-between mt-1 text-[10px] text-zinc-600">
+                                        <span>{formatBytes(Math.round(uploadFile_!.size * uploadProgress / 100))}</span>
+                                        <span>{formatBytes(uploadFile_!.size)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="text-4xl mb-2">{dragOver ? "📥" : "🎵"}</div>
+                                <p className="text-sm text-zinc-300 font-medium">
+                                    Drop audio file here or click to browse
+                                </p>
+                                <p className="text-[11px] text-zinc-600 mt-1">
+                                    WAV, MP3, FLAC, OGG, AAC — auto-runs full reconstruction pipeline
+                                </p>
+                            </>
+                        )}
                     </div>
 
                     {/* Or use existing project ID */}
@@ -305,45 +430,91 @@ export default function ReconstructPage() {
                 <Card className="bg-zinc-900/50 border-zinc-800">
                     <CardHeader>
                         <div className="flex items-center justify-between">
-                            <CardTitle className="text-lg">⚡ Pipeline</CardTitle>
-                            <Badge
-                                variant="outline"
-                                className={job.status === "completed"
-                                    ? "border-emerald-500/30 text-emerald-400"
-                                    : job.status === "error"
-                                        ? "border-red-500/30 text-red-400"
-                                        : "border-amber-500/30 text-amber-400"
-                                }
-                            >
-                                {job.progress}%
-                            </Badge>
+                            <div className="flex items-center gap-3">
+                                <CardTitle className="text-lg">⚡ Pipeline</CardTitle>
+                                {job.status === "running" && (
+                                    <span className="text-xs font-mono text-zinc-500 bg-zinc-800/50 px-2 py-1 rounded">
+                                        ⏱ {formatElapsed(elapsed)}
+                                    </span>
+                                )}
+                                {job.status === "completed" && (
+                                    <span className="text-xs font-mono text-emerald-500 bg-emerald-500/10 px-2 py-1 rounded">
+                                        ✓ {formatElapsed(elapsed)}
+                                    </span>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Badge
+                                    variant="outline"
+                                    className={job.status === "completed"
+                                        ? "border-emerald-500/30 text-emerald-400"
+                                        : job.status === "error"
+                                            ? "border-red-500/30 text-red-400"
+                                            : "border-amber-500/30 text-amber-400"
+                                    }
+                                >
+                                    {job.status === "completed" ? "Complete" : job.status === "error" ? "Error" : `${job.progress}%`}
+                                </Badge>
+                            </div>
                         </div>
                     </CardHeader>
                     <CardContent>
                         {/* Progress bar */}
                         <div className="w-full h-2 bg-zinc-800 rounded-full mb-6 overflow-hidden">
                             <div
-                                className={`h-full rounded-full transition-all duration-500 ${job.status === "error"
+                                className={`h-full rounded-full transition-all duration-700 ease-out ${job.status === "error"
                                     ? "bg-red-500"
-                                    : "bg-gradient-to-r from-amber-500 to-red-500"
+                                    : job.status === "completed"
+                                        ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                                        : "bg-gradient-to-r from-amber-500 via-orange-500 to-red-500"
                                     }`}
                                 style={{ width: `${job.progress}%` }}
                             />
                         </div>
 
-                        {/* Stage cards */}
+                        {/* Stage cards — upgraded with timing & connectors */}
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                            {STAGES.map((stage) => {
+                            {STAGES.map((stage, idx) => {
                                 const status = job.stages[stage.key];
+                                const stageStatus = status?.status || "pending";
+                                const timing = stageTimings[stage.key];
+                                const isActive = stageStatus === "running";
                                 return (
                                     <div
                                         key={stage.key}
-                                        className={`rounded-lg border p-3 text-center transition-all ${getStageColor(status?.status || "pending")}`}
+                                        className={`relative rounded-lg border p-3 text-center transition-all duration-500 ${getStageColor(stageStatus)} ${isActive ? "ring-1 ring-amber-500/30 shadow-lg shadow-amber-500/10" : ""
+                                            }`}
                                     >
-                                        <div className="text-2xl mb-1">{stage.icon}</div>
+                                        {/* Stage number */}
+                                        <div className="absolute -top-2 -left-1 text-[9px] font-bold bg-zinc-900 text-zinc-600 px-1.5 rounded-full border border-zinc-800">
+                                            {idx + 1}
+                                        </div>
+
+                                        {/* Icon with status indicator */}
+                                        <div className="text-2xl mb-1 relative inline-block">
+                                            {stage.icon}
+                                            {stageStatus === "completed" && (
+                                                <span className="absolute -top-1 -right-3 text-xs">✅</span>
+                                            )}
+                                            {isActive && (
+                                                <span className="absolute -top-1 -right-3 w-3 h-3 rounded-full bg-amber-400 animate-ping" />
+                                            )}
+                                        </div>
+
                                         <div className="text-xs font-bold">{stage.label}</div>
-                                        <div className="text-[10px] mt-1 opacity-70">
-                                            {status?.status === "completed" ? "✓" : status?.status === "running" ? "●" : status?.status === "error" ? "✗" : "○"}
+                                        <div className="text-[10px] mt-0.5 opacity-60">{stage.desc}</div>
+
+                                        {/* Status + timing */}
+                                        <div className="mt-1.5 text-[10px]">
+                                            {stageStatus === "completed" && timing !== undefined ? (
+                                                <span className="text-emerald-400 font-mono">{timing}s</span>
+                                            ) : isActive ? (
+                                                <span className="text-amber-400 animate-pulse">Processing…</span>
+                                            ) : stageStatus === "error" ? (
+                                                <span className="text-red-400">Failed</span>
+                                            ) : (
+                                                <span className="text-zinc-600">Queued</span>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -352,8 +523,9 @@ export default function ReconstructPage() {
 
                         {/* Current stage message */}
                         {job.status === "running" && (
-                            <div className="mt-4 text-sm text-zinc-400 text-center animate-pulse">
-                                {job.stages[job.stage]?.message || "Processing..."}
+                            <div className="mt-4 flex items-center justify-center gap-2 text-sm text-zinc-400">
+                                <div className="w-4 h-4 rounded-full border-2 border-amber-500/30 border-t-amber-400 animate-spin" />
+                                <span>{job.stages[job.stage]?.message || "Processing..."}</span>
                             </div>
                         )}
 
@@ -371,6 +543,9 @@ export default function ReconstructPage() {
                             <div className="mt-4 p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                                 <p className="text-emerald-400 font-semibold text-center">
                                     ✅ Reconstruction complete — {job.result.rendered_stems} stems rendered
+                                    {elapsed > 0 && (
+                                        <span className="text-emerald-500/60 font-normal ml-2">in {formatElapsed(elapsed)}</span>
+                                    )}
                                 </p>
                                 {job.result.analysis && (
                                     <div className="flex flex-wrap gap-3 justify-center mt-3">
@@ -393,12 +568,27 @@ export default function ReconstructPage() {
                                         )}
                                         {job.result.qc && (
                                             <Badge variant="outline" className={`${job.result.qc.passed
-                                                    ? "border-emerald-500/30 text-emerald-400"
-                                                    : "border-amber-500/30 text-amber-400"
+                                                ? "border-emerald-500/30 text-emerald-400"
+                                                : "border-amber-500/30 text-amber-400"
                                                 }`}>
                                                 QC: {job.result.qc.overall_score.toFixed(1)}%
                                             </Badge>
                                         )}
+                                    </div>
+                                )}
+
+                                {/* Stage timing summary */}
+                                {Object.keys(stageTimings).length > 0 && (
+                                    <div className="flex flex-wrap gap-2 justify-center mt-3 pt-3 border-t border-emerald-500/10">
+                                        {STAGES.map((s) => {
+                                            const t = stageTimings[s.key];
+                                            if (t === undefined) return null;
+                                            return (
+                                                <span key={s.key} className="text-[10px] text-zinc-500 font-mono">
+                                                    {s.label}: {t}s
+                                                </span>
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </div>
@@ -541,13 +731,13 @@ export default function ReconstructPage() {
                                     </div>
                                     <div className="text-right">
                                         <div className={`text-2xl font-bold ${job.result.qc.passed ? "text-emerald-400" :
-                                                job.result.qc.overall_score >= 70 ? "text-amber-400" : "text-red-400"
+                                            job.result.qc.overall_score >= 70 ? "text-amber-400" : "text-red-400"
                                             }`}>
                                             {job.result.qc.overall_score.toFixed(1)}%
                                         </div>
                                         <Badge variant="outline" className={`text-[10px] ${job.result.qc.passed
-                                                ? "border-emerald-500/30 text-emerald-400"
-                                                : "border-red-500/30 text-red-400"
+                                            ? "border-emerald-500/30 text-emerald-400"
+                                            : "border-red-500/30 text-red-400"
                                             }`}>
                                             {job.result.qc.passed ? "✅ PASSED" : "⚠️ Below target"}
                                         </Badge>
@@ -572,8 +762,8 @@ export default function ReconstructPage() {
                                             <div
                                                 key={dim}
                                                 className={`rounded-lg p-3 transition-all ${isWeakest ? "bg-red-500/10 border border-red-500/20" :
-                                                        isStrongest ? "bg-emerald-500/10 border border-emerald-500/20" :
-                                                            "bg-zinc-800/50"
+                                                    isStrongest ? "bg-emerald-500/10 border border-emerald-500/20" :
+                                                        "bg-zinc-800/50"
                                                     }`}
                                                 title={detail}
                                             >
@@ -582,8 +772,8 @@ export default function ReconstructPage() {
                                                         {dim.replace(/_/g, " ")}
                                                     </div>
                                                     <span className={`text-[11px] font-bold ${score >= 90 ? "text-emerald-400" :
-                                                            score >= 70 ? "text-amber-400" :
-                                                                score > 0 ? "text-red-400" : "text-zinc-600"
+                                                        score >= 70 ? "text-amber-400" :
+                                                            score > 0 ? "text-red-400" : "text-zinc-600"
                                                         }`}>
                                                         {score.toFixed(1)}%
                                                     </span>
@@ -592,8 +782,8 @@ export default function ReconstructPage() {
                                                     <div className="flex-1 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
                                                         <div
                                                             className={`h-full rounded-full transition-all ${score >= 90 ? "bg-emerald-500" :
-                                                                    score >= 70 ? "bg-amber-500" :
-                                                                        score > 0 ? "bg-red-500" : "bg-zinc-600"
+                                                                score >= 70 ? "bg-amber-500" :
+                                                                    score > 0 ? "bg-red-500" : "bg-zinc-600"
                                                                 }`}
                                                             style={{ width: `${score}%` }}
                                                         />
