@@ -157,12 +157,7 @@ async def start_reconstruction(req: ReconstructRequest) -> dict[str, Any]:
 
     asyncio.create_task(_run_reconstruction(job_id, req))
 
-    return {
-        "job_id": job_id,
-        "status": "running",
-        "stage": "ear",
-        "message": "Reconstruction pipeline started — track-agnostic mode",
-    }
+    return _reconstruct_jobs[job_id]
 
 
 @router.get("/status/{job_id}")
