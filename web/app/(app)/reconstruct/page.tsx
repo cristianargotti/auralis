@@ -30,6 +30,20 @@ interface LogEntry {
     msg: string;
 }
 
+interface StemAnalysis {
+    rms_db: number;
+    peak_db: number;
+    energy_pct: number;
+    duration: number;
+    file_size_mb: number;
+    freq_bands: {
+        low: number;
+        mid: number;
+        high: number;
+    };
+    error?: string;
+}
+
 interface ReconstructJob {
     job_id: string;
     project_id: string;
@@ -49,6 +63,7 @@ interface ReconstructJob {
         midi_tracks?: Record<string, { notes: number; pitch_range: number[]; confidence: number }>;
         rendered_sections?: number;
         rendered_stems: number;
+        stem_analysis?: Record<string, StemAnalysis>;
         master?: {
             output?: string;
             peak_dbtp?: number;
@@ -319,6 +334,19 @@ export default function ReconstructPage() {
     const getEnergyHeight = (rms: number) => {
         const normalized = Math.max(0, Math.min(1, (rms + 40) / 35));
         return `${Math.max(8, normalized * 100)}%`;
+    };
+
+    const getStemConfig = (name: string) => {
+        const configs: Record<string, { icon: string; gradient: string; glow: string; textColor: string; barGradient: string }> = {
+            vocals: { icon: "🎤", gradient: "from-violet-900/40 to-purple-900/40", glow: "rgba(139,92,246,0.15)", textColor: "text-violet-400", barGradient: "from-violet-600 to-purple-500" },
+            drums: { icon: "🥁", gradient: "from-red-900/40 to-orange-900/40", glow: "rgba(239,68,68,0.15)", textColor: "text-red-400", barGradient: "from-red-600 to-orange-500" },
+            bass: { icon: "🎸", gradient: "from-blue-900/40 to-cyan-900/40", glow: "rgba(59,130,246,0.15)", textColor: "text-blue-400", barGradient: "from-blue-600 to-cyan-500" },
+            other: { icon: "🎹", gradient: "from-emerald-900/40 to-teal-900/40", glow: "rgba(16,185,129,0.15)", textColor: "text-emerald-400", barGradient: "from-emerald-600 to-teal-500" },
+            piano: { icon: "🎹", gradient: "from-pink-900/40 to-rose-900/40", glow: "rgba(236,72,153,0.15)", textColor: "text-pink-400", barGradient: "from-pink-600 to-rose-500" },
+            guitar: { icon: "🎸", gradient: "from-amber-900/40 to-yellow-900/40", glow: "rgba(245,158,11,0.15)", textColor: "text-amber-400", barGradient: "from-amber-600 to-yellow-500" },
+            instrumental: { icon: "🎵", gradient: "from-teal-900/40 to-emerald-900/40", glow: "rgba(20,184,166,0.15)", textColor: "text-teal-400", barGradient: "from-teal-600 to-emerald-500" },
+        };
+        return configs[name.toLowerCase()] || { icon: "🎵", gradient: "from-zinc-800/40 to-zinc-900/40", glow: "rgba(161,161,170,0.1)", textColor: "text-zinc-400", barGradient: "from-zinc-600 to-zinc-500" };
     };
 
     const formatTime = (seconds: number) => {
@@ -658,7 +686,112 @@ export default function ReconstructPage() {
                 </Card>
             )}
 
-            {/* Analysis Results — auto-detected data */}
+            {/* 🎛️ Separated Stems — Instrument Detection Visual */}
+            {job?.result?.stem_analysis && Object.keys(job.result.stem_analysis).length > 0 && (
+                <Card className="bg-zinc-900/50 border-zinc-800 overflow-hidden">
+                    <CardHeader>
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <CardTitle className="text-lg">🎛️ Separated Stems</CardTitle>
+                                <Badge variant="outline" className="border-cyan-500/30 text-cyan-400">
+                                    {Object.keys(job.result.stem_analysis).length} instruments
+                                </Badge>
+                            </div>
+                            <CardDescription>AI-detected — per-instrument analysis</CardDescription>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        {Object.entries(job.result.stem_analysis).map(([name, data], idx) => {
+                            if (data.error) return null;
+                            const config = getStemConfig(name);
+                            const energyClamped = Math.min(data.energy_pct, 100);
+                            return (
+                                <div
+                                    key={name}
+                                    className="relative group rounded-xl border border-zinc-800/80 bg-gradient-to-r from-zinc-900/90 to-zinc-950/90 backdrop-blur-sm p-4 hover:border-zinc-700/60 transition-all duration-500"
+                                    style={{
+                                        animationDelay: `${idx * 120}ms`,
+                                        animation: "fadeSlideIn 0.5s ease-out both",
+                                    }}
+                                >
+                                    {/* Glow effect */}
+                                    <div
+                                        className="absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+                                        style={{ background: `radial-gradient(ellipse at 0% 50%, ${config.glow}, transparent 60%)` }}
+                                    />
+
+                                    <div className="relative flex items-center gap-4">
+                                        {/* Icon + Name */}
+                                        <div className="flex items-center gap-3 min-w-[140px]">
+                                            <div className={`text-3xl p-2 rounded-lg bg-gradient-to-br ${config.gradient} bg-opacity-20 shadow-lg`} style={{ boxShadow: `0 0 20px ${config.glow}` }}>
+                                                {config.icon}
+                                            </div>
+                                            <div>
+                                                <div className="font-bold text-sm capitalize text-zinc-100">{name}</div>
+                                                <div className="text-[10px] text-zinc-500 font-mono">{data.file_size_mb} MB</div>
+                                            </div>
+                                        </div>
+
+                                        {/* Energy bar */}
+                                        <div className="flex-1">
+                                            <div className="flex items-center justify-between mb-1">
+                                                <span className="text-[10px] text-zinc-500">Energy contribution</span>
+                                                <span className={`text-xs font-bold font-mono ${config.textColor}`}>{data.energy_pct}%</span>
+                                            </div>
+                                            <div className="w-full h-3 bg-zinc-800/80 rounded-full overflow-hidden">
+                                                <div
+                                                    className={`h-full rounded-full bg-gradient-to-r ${config.barGradient} transition-all duration-1000 ease-out`}
+                                                    style={{ width: `${energyClamped}%` }}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {/* dB Meters */}
+                                        <div className="flex gap-4 min-w-[120px]">
+                                            <div className="text-center">
+                                                <div className="text-[9px] text-zinc-600 uppercase tracking-wider">RMS</div>
+                                                <div className={`text-sm font-mono font-bold ${config.textColor}`}>{data.rms_db} dB</div>
+                                            </div>
+                                            <div className="text-center">
+                                                <div className="text-[9px] text-zinc-600 uppercase tracking-wider">Peak</div>
+                                                <div className="text-sm font-mono font-bold text-zinc-300">{data.peak_db} dBFS</div>
+                                            </div>
+                                        </div>
+
+                                        {/* Frequency Spectrum */}
+                                        <div className="min-w-[80px]">
+                                            <div className="text-[9px] text-zinc-600 uppercase tracking-wider text-center mb-1">Spectrum</div>
+                                            <div className="flex gap-0.5 items-end h-6 justify-center">
+                                                <div
+                                                    className="w-5 rounded-t bg-gradient-to-t from-blue-600 to-blue-400 transition-all duration-700"
+                                                    style={{ height: `${Math.max(data.freq_bands.low * 0.24, 2)}px` }}
+                                                    title={`Low: ${data.freq_bands.low}%`}
+                                                />
+                                                <div
+                                                    className="w-5 rounded-t bg-gradient-to-t from-emerald-600 to-emerald-400 transition-all duration-700"
+                                                    style={{ height: `${Math.max(data.freq_bands.mid * 0.24, 2)}px` }}
+                                                    title={`Mid: ${data.freq_bands.mid}%`}
+                                                />
+                                                <div
+                                                    className="w-5 rounded-t bg-gradient-to-t from-amber-600 to-amber-400 transition-all duration-700"
+                                                    style={{ height: `${Math.max(data.freq_bands.high * 0.24, 2)}px` }}
+                                                    title={`High: ${data.freq_bands.high}%`}
+                                                />
+                                            </div>
+                                            <div className="flex gap-0.5 justify-center mt-0.5">
+                                                <span className="text-[7px] text-blue-400 w-5 text-center">L</span>
+                                                <span className="text-[7px] text-emerald-400 w-5 text-center">M</span>
+                                                <span className="text-[7px] text-amber-400 w-5 text-center">H</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </CardContent>
+                </Card>
+            )}
+
             {analysis && (
                 <>
                     {/* Track DNA */}

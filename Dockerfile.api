@@ -1,5 +1,10 @@
-# ── AURALIS API — Multi-stage build ──
+# ── AURALIS API — Full ML Pipeline ──
 FROM python:3.12-slim AS base
+
+# System deps for audio processing + ML
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -8,13 +13,19 @@ WORKDIR /app
 
 # Install dependencies first (cached layer)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project \
+    --extra ml --extra audio \
+    --index-url https://pypi.org/simple \
+    --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copy source
 COPY auralis/ auralis/
 COPY scripts/ scripts/
 COPY README.md ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev \
+    --extra ml --extra audio \
+    --index-url https://pypi.org/simple \
+    --extra-index-url https://download.pytorch.org/whl/cpu
 
 EXPOSE 8000
 

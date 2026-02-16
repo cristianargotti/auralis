@@ -13,6 +13,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import soundfile as sf
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -223,7 +226,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
             try:
                 from auralis.ear.separator import separate_track
 
-                sep_result = separate_track(
+                sep_result = await asyncio.to_thread(
+                    separate_track,
                     audio_path=audio_file,
                     output_dir=stems_dir,
                     model=req.separator,
@@ -232,6 +236,56 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     f"Separated {len(sep_result.stems)} stems via {sep_result.model_used}"
                 )
                 _log(job, f"✓ Separated {len(sep_result.stems)} stems via {sep_result.model_used}", "success")
+
+                # ── Per-stem analysis ──
+                stem_analysis: dict[str, Any] = {}
+                original_audio, sr = sf.read(str(audio_file))
+                if original_audio.ndim > 1:
+                    original_mono = np.mean(original_audio, axis=1)
+                else:
+                    original_mono = original_audio
+                original_rms = float(np.sqrt(np.mean(original_mono ** 2)))
+
+                for stem_name, stem_path in sep_result.stems.items():
+                    try:
+                        audio_data, stem_sr = sf.read(str(stem_path))
+                        if audio_data.ndim > 1:
+                            mono = np.mean(audio_data, axis=1)
+                        else:
+                            mono = audio_data
+
+                        rms = float(np.sqrt(np.mean(mono ** 2)))
+                        peak = float(np.max(np.abs(mono)))
+                        rms_db = float(20 * np.log10(rms + 1e-10))
+                        peak_db = float(20 * np.log10(peak + 1e-10))
+                        energy_pct = round((rms / original_rms) * 100, 1) if original_rms > 0 else 0
+
+                        # Detect dominant frequency band
+                        fft_data = np.abs(np.fft.rfft(mono[:stem_sr * 4]))  # first 4 seconds
+                        freqs = np.fft.rfftfreq(len(mono[:stem_sr * 4]), 1.0 / stem_sr)
+                        low_energy = float(np.sum(fft_data[(freqs >= 20) & (freqs < 250)]))
+                        mid_energy = float(np.sum(fft_data[(freqs >= 250) & (freqs < 4000)]))
+                        high_energy = float(np.sum(fft_data[(freqs >= 4000) & (freqs <= 20000)]))
+                        total_e = low_energy + mid_energy + high_energy + 1e-10
+
+                        stem_analysis[stem_name] = {
+                            "rms_db": round(rms_db, 1),
+                            "peak_db": round(peak_db, 1),
+                            "energy_pct": energy_pct,
+                            "duration": round(len(mono) / stem_sr, 2),
+                            "file_size_mb": round(stem_path.stat().st_size / 1024 / 1024, 2),
+                            "freq_bands": {
+                                "low": round(low_energy / total_e * 100, 1),
+                                "mid": round(mid_energy / total_e * 100, 1),
+                                "high": round(high_energy / total_e * 100, 1),
+                            },
+                        }
+                        _log(job, f"  🎛️ {stem_name}: {rms_db:.1f} dB RMS | {peak_db:.1f} dBFS peak | {energy_pct:.0f}% energy")
+                    except Exception:
+                        stem_analysis[stem_name] = {"error": "analysis failed"}
+
+                job["result"]["stem_analysis"] = stem_analysis  # type: ignore[index]
+                _log(job, f"✓ Analyzed {len(stem_analysis)} stems", "success")
             except ImportError:
                 job["stages"]["ear"]["message"] = (
                     "Separation models not installed — using analysis only"
