@@ -10,6 +10,7 @@ from auralis.api.routes.ear import router as ear_router
 from auralis.api.routes.gpu import router as gpu_router
 from auralis.api.routes.grid import router as grid_router
 from auralis.api.routes.hands import router as hands_router
+from auralis.api.routes.reconstruct import router as reconstruct_router
 from auralis.api.websocket import websocket_endpoint
 
 app = FastAPI(
@@ -62,6 +63,11 @@ app.include_router(
     prefix="/api",
     dependencies=[Depends(get_current_user)],
 )
+app.include_router(
+    reconstruct_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
 
 
 # WebSocket endpoint
@@ -111,6 +117,10 @@ async def info() -> dict[str, object]:
             "brain_render": "POST /api/brain/render",
             "brain_chat": "POST /api/brain/chat",
             "brain_status": "GET /api/brain/status",
+            "reconstruct_blueprint": "GET /api/reconstruct/blueprint",
+            "reconstruct_start": "POST /api/reconstruct/start",
+            "reconstruct_status": "GET /api/reconstruct/status/{job_id}",
+            "reconstruct_sections": "GET /api/reconstruct/sections",
             "gpu_status": "GET /api/gpu/status",
             "websocket": "WS /ws/{project_id}",
         },

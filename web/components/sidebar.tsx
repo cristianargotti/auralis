@@ -42,6 +42,18 @@ const NAV_ITEMS = [
         description: "Quality report",
     },
     {
+        label: "Reconstruct",
+        href: "/reconstruct",
+        icon: "🔬",
+        description: "Bar-by-bar rebuild",
+    },
+    {
+        label: "Creator",
+        href: "/creator",
+        icon: "✨",
+        description: "AI production",
+    },
+    {
         label: "AI Chat",
         href: "/chat",
         icon: "🧠",
