@@ -440,9 +440,6 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         rendered_stems: dict[str, str] = {}
 
         try:
-            import soundfile as sf_lib
-            import numpy as np
-
             if stems_dir.exists():
                 # Passthrough mode: use separated stems as reconstruction basis
                 stem_files = list(stems_dir.glob("*.wav"))
@@ -458,7 +455,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
 
                     try:
                         from auralis.hands.effects import EffectChain, process_chain
-                        data, sr = sf_lib.read(str(stem_file), dtype="float64")
+                        data, sr = sf.read(str(stem_file), dtype="float64")
                         mono = np.mean(data, axis=1) if data.ndim > 1 else data
 
                         # Apply subtle processing to match original characteristics
@@ -466,7 +463,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         processed = process_chain(
                             mono, chain, sr=sr, bpm=plan.get("bpm", 120.0)
                         )
-                        sf_lib.write(str(rendered_path), processed, sr)
+                        sf.write(str(rendered_path), processed, sr)
                     except (ImportError, Exception):
                         # Fallback: direct copy
                         import shutil
@@ -513,9 +510,6 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         master_info: dict[str, Any] = {}
 
         try:
-            import numpy as np
-            import soundfile as sf_lib
-
             if rendered_stems:
                 # Load all rendered stems and mix
                 try:
@@ -527,7 +521,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     ))
 
                     for stem_name, stem_path in rendered_stems.items():
-                        data, sr = sf_lib.read(stem_path, dtype="float64")
+                        data, sr = sf.read(stem_path, dtype="float64")
                         mono = np.mean(data, axis=1) if data.ndim > 1 else data
                         mixer.add_track(stem_name, mono)
 
@@ -541,7 +535,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     all_audio = []
                     sr = 44100
                     for path in rendered_stems.values():
-                        data, sr = sf_lib.read(path, dtype="float64")
+                        data, sr = sf.read(path, dtype="float64")
                         mono = np.mean(data, axis=1) if data.ndim > 1 else data
                         all_audio.append(mono)
 
@@ -551,7 +545,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         for a in all_audio:
                             mix[:len(a)] += a
                         mix /= len(all_audio)
-                        sf_lib.write(str(mix_path), mix, sr)
+                        sf.write(str(mix_path), mix, sr)
                     job["stages"]["console"]["message"] = f"Sum-mixed {len(all_audio)} stems"
 
                 # Master by reference
