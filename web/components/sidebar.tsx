@@ -12,6 +12,12 @@ const NAV_ITEMS = [
         description: "Projects & activity",
     },
     {
+        label: "Architecture",
+        href: "/architecture",
+        icon: "🏗️",
+        description: "Engine blueprint",
+    },
+    {
         label: "Deconstructor",
         href: "/deconstruct",
         icon: "👂",
