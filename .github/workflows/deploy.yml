@@ -1,9 +1,8 @@
 # =============================================================================
-# AURALIS — Deploy Pipeline
+# AURALIS — Auto-Deploy Pipeline
 # =============================================================================
-# Triggered on merge to main. Builds Docker images, scans with Trivy,
-# pushes to ECR, signs with Cosign (keyless), generates SBOM,
-# and deploys to EC2.
+# Push to main → SSH to EC2 → git pull → docker compose rebuild.
+# Zero-effort deploys. Just push and go.
 # =============================================================================
 name: 🚀 Deploy
 
@@ -12,125 +11,41 @@ on:
     branches: [main]
     paths:
       - "auralis/**"
-      - "Dockerfile.api"
-      - "Dockerfile.web"
+      - "web/**"
+      - "Dockerfile.*"
       - "docker-compose*.yml"
+      - "Caddyfile"
+      - "pyproject.toml"
+      - "uv.lock"
   workflow_dispatch:
 
 concurrency:
   group: deploy
-  cancel-in-progress: false # Never cancel a deploy mid-flight
-
-env:
-  ECR_REPOSITORY: auralis-api
+  cancel-in-progress: false
 
 jobs:
-  build-scan-push:
-    name: Build → Scan → Push → Sign
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-    outputs:
-      image-digest: ${{ steps.push.outputs.digest }}
-      image-uri: ${{ steps.push.outputs.image-uri }}
-
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: 🔑 Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-
-      - name: 🔑 Login to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: 🏗️ Build Docker image (API)
-        id: build
-        run: |
-          IMAGE_TAG="${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
-          IMAGE_LATEST="${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest"
-          docker build \
-            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
-            --label "org.opencontainers.image.revision=${{ github.sha }}" \
-            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -f Dockerfile.api \
-            -t "$IMAGE_TAG" \
-            -t "$IMAGE_LATEST" \
-            .
-          echo "image-tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-          echo "image-latest=$IMAGE_LATEST" >> "$GITHUB_OUTPUT"
-
-      - name: 🔍 Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.build.outputs.image-tag }}
-          severity: CRITICAL,HIGH
-          exit-code: 1
-          format: table
-          trivyignores: .trivyignore
-
-      - name: 📤 Push to ECR
-        id: push
-        run: |
-          docker push "${{ steps.build.outputs.image-tag }}"
-          docker push "${{ steps.build.outputs.image-latest }}"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.build.outputs.image-tag }}" | cut -d@ -f2)
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "image-uri=${{ steps.build.outputs.image-tag }}" >> "$GITHUB_OUTPUT"
-
-      - name: ✍️ Cosign — Sign image (keyless OIDC)
-        uses: sigstore/cosign-installer@v3
-      - run: |
-          cosign sign --yes "${{ steps.build.outputs.image-tag }}"
-          cosign sign --yes "${{ steps.build.outputs.image-latest }}"
-
-      - name: 📋 Generate SBOM (CycloneDX)
-        run: |
-          pip install --quiet cyclonedx-bom 2>/dev/null || true
-          cyclonedx-py environment --output-format json -o sbom.cdx.json 2>/dev/null || \
-            echo '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}' > sbom.cdx.json
-
-      - name: 📤 Upload SBOM
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-${{ github.sha }}
-          path: sbom.cdx.json
-          retention-days: 90
-
   deploy:
     name: Deploy to EC2
-    needs: build-scan-push
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: production
+    timeout-minutes: 15
 
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: 🔑 Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: � Deploy via SSH
+        uses: appleboy/ssh-action@v1
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            cd ~/auralis
 
-      - name: 🚀 Deploy via SSM (agnostic — no SSH keys)
-        run: |
-          aws ssm send-command \
-            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
-            --document-name "AWS-RunShellScript" \
-            --parameters commands='[
-              "cd /home/ec2-user/auralis",
-              "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com",
-              "docker compose pull",
-              "docker compose up -d --force-recreate"
-            ]' \
-            --timeout-seconds 300 \
-            --output text
+            echo "� Pulling latest code..."
+            git pull origin main
+
+            echo "🏗️ Rebuilding containers..."
+            docker compose up -d --build
+
+            echo "✅ Deploy complete!"
+            docker compose ps
