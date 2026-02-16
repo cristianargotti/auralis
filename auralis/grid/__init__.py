@@ -1,0 +1,1 @@
+"""GRID — Composition & Arrangement layer."""

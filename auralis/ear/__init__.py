@@ -1,0 +1,1 @@
+"""EAR — Analysis & Deconstruction layer."""

@@ -1,0 +1,55 @@
+name: AURALIS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Secret scanning
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint
+        run: uv run ruff check auralis/ tests/
+
+      - name: Format check
+        run: uv run ruff format --check auralis/ tests/
+
+      - name: Type check
+        run: uv run mypy auralis/
+
+      - name: Tests
+        run: uv run pytest --cov=auralis --cov-report=term-missing --tb=short -q
+
+      - name: File size check
+        run: |
+          OVERSIZED=0
+          for file in $(find auralis/ -name "*.py"); do
+            lines=$(wc -l < "$file" | tr -d ' ')
+            if [ "$lines" -gt 800 ]; then
+              echo "❌ $file: $lines lines (max 800)"
+              OVERSIZED=1
+            fi
+          done
+          exit $OVERSIZED

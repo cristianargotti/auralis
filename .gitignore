@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio files (large)
+*.wav
+*.mp3
+*.flac
+*.aiff
+*.aif
+*.ogg
+
+# But track project configs
+!projects/**/project.yaml
+
+# Node (web/)
+web/node_modules/
+web/.next/
+web/out/
+
+# Logs
+*.log
+
+# Lock files (keep uv.lock)

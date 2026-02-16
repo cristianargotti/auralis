@@ -1,0 +1,9 @@
+title = "AURALIS Gitleaks Config"
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+    '''.gitleaks.toml''',
+    '''uv.lock''',
+    '''web/package-lock.json''',
+]
