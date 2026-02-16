@@ -5,8 +5,7 @@ Environment variables:
 - AURALIS_AUTH_PASSWORD_HASH: bcrypt hash of the password (required)
 - AURALIS_JWT_SECRET: secret key for JWT signing (required)
 
-Generate a password hash:
-    python -c "from passlib.hash import bcrypt; print(bcrypt.hash('your-password'))"
+Generate a password hash with scripts/gen_password.py
 """
 
 from __future__ import annotations
@@ -14,10 +13,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
+import bcrypt as _bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-from passlib.hash import bcrypt  # type: ignore[import-untyped]
 from pydantic import BaseModel
 
 from auralis.config import settings
@@ -58,8 +57,9 @@ def verify_password(plain_password: str) -> bool:
     """Verify a plain password against the stored hash."""
     if not settings.auth_password_hash:
         return False
-    result: bool = bcrypt.verify(plain_password, settings.auth_password_hash)  # type: ignore[no-untyped-call]
-    return result
+    return _bcrypt.checkpw(
+        plain_password.encode(), settings.auth_password_hash.encode()
+    )
 
 
 def authenticate_user(username: str, password: str) -> bool:
