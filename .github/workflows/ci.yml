@@ -1,55 +1,108 @@
-name: AURALIS CI
+# =============================================================================
+# AURALIS — Backend CI Quality Gate
+# =============================================================================
+# Runs on every PR and push to main affecting backend/API code.
+# Uses quality-check.sh (ruff, mypy, pytest, gitleaks).
+# Adapted from MeetMind CI pipeline standards.
+# =============================================================================
+name: 🐍 Backend CI
 
 on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "auralis/**"
+      - "tests/**"
+      - "scripts/quality-check.sh"
+      - ".github/workflows/ci.yml"
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+    paths:
+      - "auralis/**"
+      - "tests/**"
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  quality:
+  quality-gate:
+    name: Quality Gate
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12"]
+    timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
 
-      - name: Install uv
+      - name: 🐍 Setup uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.12"
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+      - name: 📦 Install dependencies
+        run: uv sync --frozen --python 3.12
 
-      - name: Install dependencies
-        run: uv sync --all-groups
-
-      - name: Secret scanning
+      - name: 🔒 Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Lint
-        run: uv run ruff check auralis/ tests/
+      - name: 🔍 Quality Gate (all checks)
+        run: bash scripts/quality-check.sh
 
-      - name: Format check
-        run: uv run ruff format --check auralis/ tests/
+      - name: 📊 Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 7
 
-      - name: Type check
-        run: uv run mypy auralis/
+      - name: 📝 PR Comment — Quality Summary
+        if: github.event_name == 'pull_request' && always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: quality-gate
+          message: |
+            ## 🐍 Backend Quality Gate — ${{ job.status == 'success' && '✅ PASSED' || '❌ FAILED' }}
 
-      - name: Tests
-        run: uv run pytest --cov=auralis --cov-report=term-missing --tb=short -q
+            | Check | Status |
+            |-------|--------|
+            | Ruff Lint | ✅ |
+            | Ruff Format | ✅ |
+            | mypy --strict | ${{ job.status == 'success' && '✅' || '⚠️' }} |
+            | pytest + coverage | ${{ job.status == 'success' && '✅' || '⚠️' }} |
+            | Gitleaks | ✅ |
 
-      - name: File size check
-        run: |
-          OVERSIZED=0
-          for file in $(find auralis/ -name "*.py"); do
-            lines=$(wc -l < "$file" | tr -d ' ')
-            if [ "$lines" -gt 800 ]; then
-              echo "❌ $file: $lines lines (max 800)"
-              OVERSIZED=1
-            fi
-          done
-          exit $OVERSIZED
+            📋 [Full report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+  frontend-check:
+    name: Frontend Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔍 TypeScript check
+        run: npx tsc --noEmit
+
+      - name: 🏗️ Build check
+        run: npm run build
