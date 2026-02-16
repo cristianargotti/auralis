@@ -12,18 +12,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { uploadTrack, startAnalysis, getJobStatus } from "@/lib/api";
 
-type JobStatus = "idle" | "uploading" | "analyzing" | "complete" | "error";
+type JobStatusType = "idle" | "uploading" | "analyzing" | "complete" | "error";
 
 interface AnalysisJob {
-    status: JobStatus;
+    status: JobStatusType;
     progress: number;
     message: string;
     projectId: string | null;
     result: Record<string, unknown> | null;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const VALID_EXTENSIONS = [".wav", ".mp3", ".flac", ".aiff", ".aif"];
 
 export default function DeconstructPage() {
@@ -58,16 +58,7 @@ export default function DeconstructPage() {
         });
 
         try {
-            const formData = new FormData();
-            formData.append("file", file);
-
-            const uploadRes = await fetch(`${API_BASE}/api/ear/upload`, {
-                method: "POST",
-                body: formData,
-            });
-
-            if (!uploadRes.ok) throw new Error("Upload failed");
-            const uploadData = await uploadRes.json();
+            const uploadData = await uploadTrack(file);
             const projectId = uploadData.project_id;
 
             setJob((prev) => ({
@@ -79,21 +70,13 @@ export default function DeconstructPage() {
             }));
 
             // Start analysis
-            const analyzeRes = await fetch(
-                `${API_BASE}/api/ear/analyze/${projectId}`,
-                { method: "POST" }
-            );
-            if (!analyzeRes.ok) throw new Error("Analysis start failed");
-            const analyzeData = await analyzeRes.json();
+            const analyzeData = await startAnalysis(projectId);
             const jobId = analyzeData.job_id;
 
             // Poll status
             const poll = setInterval(async () => {
                 try {
-                    const statusRes = await fetch(
-                        `${API_BASE}/api/ear/status/${jobId}`
-                    );
-                    const statusData = await statusRes.json();
+                    const statusData = await getJobStatus(jobId);
 
                     const progress = Math.min(
                         25 + (statusData.progress / statusData.total_steps) * 75,
@@ -168,10 +151,10 @@ export default function DeconstructPage() {
             {/* Upload zone */}
             <Card
                 className={`glass border-2 border-dashed transition-all duration-300 cursor-pointer ${dragOver
-                        ? "border-primary bg-primary/5 glow-cyan"
-                        : job.status === "idle"
-                            ? "border-border/40 hover:border-primary/40 hover:bg-primary/3"
-                            : "border-border/20"
+                    ? "border-primary bg-primary/5 glow-cyan"
+                    : job.status === "idle"
+                        ? "border-border/40 hover:border-primary/40 hover:bg-primary/3"
+                        : "border-border/20"
                     }`}
                 onDragOver={(e) => {
                     e.preventDefault();
@@ -367,8 +350,8 @@ export default function DeconstructPage() {
                             <div
                                 key={item.step}
                                 className={`rounded-lg p-3 text-center transition-all ${job.status === "analyzing" && job.progress >= item.step * 25
-                                        ? "bg-primary/8 border border-primary/20"
-                                        : "bg-secondary/30"
+                                    ? "bg-primary/8 border border-primary/20"
+                                    : "bg-secondary/30"
                                     }`}
                             >
                                 <span className="text-xl">{item.icon}</span>
