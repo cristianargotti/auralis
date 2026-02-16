@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
-import ZoomPlugin from 'wavesurfer.js/dist/plugins/zoom.esm.js';
+import { api } from '@/lib/api';
 
 interface WaveformXRayProps {
     jobId: string;
@@ -44,11 +44,9 @@ export default function WaveformXRay({ jobId }: WaveformXRayProps) {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/reconstruct/waveform/${jobId}`);
-                if (res.ok) {
-                    const json = await res.json();
-                    setData(json);
-                }
+                // Use api helper for authenticated fetch
+                const json = await api<WaveformData>(`/api/reconstruct/waveform/${jobId}`);
+                setData(json);
             } catch (e) {
                 console.error("Failed to fetch waveform data", e);
             } finally {
@@ -62,6 +60,10 @@ export default function WaveformXRay({ jobId }: WaveformXRayProps) {
     useEffect(() => {
         if (!containerRef.current || !data) return;
 
+        // Retrieve token for authenticated audio streaming
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auralis_token') : null;
+        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+
         const ws = WaveSurfer.create({
             container: containerRef.current,
             waveColor: '#4f46e5', // Indigo-600
@@ -74,6 +76,9 @@ export default function WaveformXRay({ jobId }: WaveformXRayProps) {
             normalize: true,
             minPxPerSec: zoom,
             url: `${process.env.NEXT_PUBLIC_API_URL || ''}/api/reconstruct/audio/${jobId}/${audioSource}`,
+            fetchParams: {
+                headers: authHeaders as HeadersInit
+            },
             peaks: [data.waveform], // Use pre-computed peaks for instant render
         });
 
@@ -101,7 +106,7 @@ export default function WaveformXRay({ jobId }: WaveformXRayProps) {
         return () => {
             ws.destroy();
         };
-    }, [data, jobId, audioSource]); // Re-init on source change/data load
+    }, [data, jobId, audioSource, zoom]); // Re-init on source change/data load
 
     // Add Regions (Layers)
     useEffect(() => {
