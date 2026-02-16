@@ -3,6 +3,8 @@
 # =============================================================================
 # Push to main → SSH to EC2 → git pull → docker compose rebuild.
 # Zero-effort deploys. Just push and go.
+#
+# Dynamically allows SSH from the GitHub runner IP, deploys, then revokes.
 # =============================================================================
 name: 🚀 Deploy
 
@@ -23,6 +25,10 @@ concurrency:
   group: deploy
   cancel-in-progress: false
 
+env:
+  SG_ID: sg-0e99c64ba4d5840d6
+  AWS_REGION: us-east-1
+
 jobs:
   deploy:
     name: Deploy to EC2
@@ -30,7 +36,25 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: � Deploy via SSH
+      - name: 🔑 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🌐 Open SSH for this runner
+        run: |
+          RUNNER_IP=$(curl -s https://checkip.amazonaws.com)
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ env.SG_ID }} \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" \
+            --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=source,Value=github-actions}]" || true
+          echo "Opened SSH for $RUNNER_IP"
+
+      - name: 🚀 Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -40,11 +64,22 @@ jobs:
             set -e
             cd ~/auralis
 
-            echo "� Pulling latest code..."
-            git pull origin main
+            echo "📥 Pulling latest code..."
+            git fetch origin
+            git reset --hard origin/main
 
             echo "🏗️ Rebuilding containers..."
+            docker compose down --remove-orphans
             docker compose up -d --build
 
             echo "✅ Deploy complete!"
             docker compose ps
+
+      - name: 🔒 Revoke SSH access
+        if: always()
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ env.SG_ID }} \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" || true
+          echo "Revoked SSH for $RUNNER_IP"
