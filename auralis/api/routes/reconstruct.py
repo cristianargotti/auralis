@@ -220,11 +220,15 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
             _log(job, f"Found: {audio_file.name} ({audio_file.stat().st_size / 1024 / 1024:.1f} MB)")
             job["stages"]["ear"]["message"] = f"Separating stems from {audio_file.name}..."
             _log(job, f"Starting stem separation (model: {req.separator})...")
+            _log(job, "Loading HTDemucs Fine-Tuned model (may download ~320MB on first run)...")
+            job["stages"]["ear"]["message"] = "Loading ML model & separating stems (CPU, ~5 min)..."
 
             # Run separation (Mel-RoFormer primary, HTDemucs fallback)
             stems_dir = project_dir / "stems"
             try:
                 from auralis.ear.separator import separate_track
+                import time as _time
+                t0 = _time.monotonic()
 
                 sep_result = await asyncio.to_thread(
                     separate_track,
@@ -232,12 +236,16 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     output_dir=stems_dir,
                     model=req.separator,
                 )
+                elapsed = _time.monotonic() - t0
                 job["stages"]["ear"]["message"] = (
                     f"Separated {len(sep_result.stems)} stems via {sep_result.model_used}"
                 )
-                _log(job, f"✓ Separated {len(sep_result.stems)} stems via {sep_result.model_used}", "success")
+                _log(job, f"✓ Separated {len(sep_result.stems)} stems via {sep_result.model_used} ({elapsed:.0f}s)", "success")
+                for sname, spath in sep_result.stems.items():
+                    _log(job, f"  📁 {sname}: {spath.stat().st_size / 1024 / 1024:.1f} MB")
 
                 # ── Per-stem analysis ──
+                _log(job, "Analyzing separated stems (RMS, peak, FFT)...")
                 stem_analysis: dict[str, Any] = {}
                 original_audio, sr = sf.read(str(audio_file))
                 if original_audio.ndim > 1:
@@ -248,6 +256,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
 
                 for stem_name, stem_path in sep_result.stems.items():
                     try:
+                        _log(job, f"  🔬 Analyzing {stem_name}...")
                         audio_data, stem_sr = sf.read(str(stem_path))
                         if audio_data.ndim > 1:
                             mono = np.mean(audio_data, axis=1)
@@ -258,26 +267,31 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         peak = float(np.max(np.abs(mono)))
                         rms_db = float(20 * np.log10(rms + 1e-10))
                         peak_db = float(20 * np.log10(peak + 1e-10))
-                        energy_pct = round((rms / original_rms) * 100, 1) if original_rms > 0 else 0
+                        energy_pct = float(round((rms / original_rms) * 100, 1)) if original_rms > 0 else 0.0
 
-                        # Detect dominant frequency band
-                        fft_data = np.abs(np.fft.rfft(mono[:stem_sr * 4]))  # first 4 seconds
-                        freqs = np.fft.rfftfreq(len(mono[:stem_sr * 4]), 1.0 / stem_sr)
-                        low_energy = float(np.sum(fft_data[(freqs >= 20) & (freqs < 250)]))
-                        mid_energy = float(np.sum(fft_data[(freqs >= 250) & (freqs < 4000)]))
-                        high_energy = float(np.sum(fft_data[(freqs >= 4000) & (freqs <= 20000)]))
+                        # Detect dominant frequency band via FFT
+                        n_samples = min(len(mono), int(stem_sr * 4))  # first 4 seconds
+                        fft_data = np.abs(np.fft.rfft(mono[:n_samples]))
+                        freqs = np.fft.rfftfreq(n_samples, 1.0 / stem_sr)
+                        low_mask = (freqs >= 20) & (freqs < 250)
+                        mid_mask = (freqs >= 250) & (freqs < 4000)
+                        high_mask = (freqs >= 4000) & (freqs <= 20000)
+                        low_energy = float(np.sum(fft_data[low_mask]))
+                        mid_energy = float(np.sum(fft_data[mid_mask]))
+                        high_energy = float(np.sum(fft_data[high_mask]))
                         total_e = low_energy + mid_energy + high_energy + 1e-10
 
+                        # All values must be native Python types (no numpy)
                         stem_analysis[stem_name] = {
-                            "rms_db": round(rms_db, 1),
-                            "peak_db": round(peak_db, 1),
-                            "energy_pct": energy_pct,
-                            "duration": round(len(mono) / stem_sr, 2),
-                            "file_size_mb": round(stem_path.stat().st_size / 1024 / 1024, 2),
+                            "rms_db": float(round(rms_db, 1)),
+                            "peak_db": float(round(peak_db, 1)),
+                            "energy_pct": float(energy_pct),
+                            "duration": float(round(len(mono) / stem_sr, 2)),
+                            "file_size_mb": float(round(stem_path.stat().st_size / 1024 / 1024, 2)),
                             "freq_bands": {
-                                "low": round(low_energy / total_e * 100, 1),
-                                "mid": round(mid_energy / total_e * 100, 1),
-                                "high": round(high_energy / total_e * 100, 1),
+                                "low": float(round(low_energy / total_e * 100, 1)),
+                                "mid": float(round(mid_energy / total_e * 100, 1)),
+                                "high": float(round(high_energy / total_e * 100, 1)),
                             },
                         }
                         _log(job, f"  🎛️ {stem_name}: {rms_db:.1f} dB RMS | {peak_db:.1f} dBFS peak | {energy_pct:.0f}% energy")
