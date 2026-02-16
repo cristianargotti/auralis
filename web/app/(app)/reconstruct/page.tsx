@@ -12,18 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 
-/* ── Types ──────────────────────────────────────────── */
-
-interface Section {
-    name: string;
-    start_bar: number;
-    end_bar: number;
-    bars: number;
-    rms_db: number;
-    stereo_sm: number;
-    elements: string[];
-    description: string;
-}
+/* ── Types (track-agnostic) ──────────────────────────── */
 
 interface StageStatus {
     status: "pending" | "running" | "completed" | "error";
@@ -32,67 +21,79 @@ interface StageStatus {
 
 interface ReconstructJob {
     job_id: string;
+    project_id: string;
     status: "running" | "completed" | "error";
     stage: string;
     progress: number;
     stages: Record<string, StageStatus>;
-    result: Record<string, unknown> | null;
+    result: {
+        analysis?: {
+            bpm: number;
+            key: string;
+            scale: string;
+            duration: number;
+            sections_detected: number;
+        };
+        midi_tracks?: Record<string, { notes: number; pitch_range: number[]; confidence: number }>;
+        rendered_sections?: number;
+        master?: { target_lufs: number };
+        qc?: {
+            dimensions: Record<string, number>;
+            overall_score: number;
+            target_score: number;
+        };
+    } | null;
 }
 
-interface Blueprint {
-    profile: {
-        title: string;
-        artist: string;
-        bpm: number;
-        key: string;
-        scale: string;
-        total_bars: number;
-        duration_s: number;
-    };
-    sections: Section[];
-    energy_map: { bar: number; rms_db: number; phase: string }[];
-    quality_targets: Record<string, unknown>;
+interface AnalysisData {
+    tempo: number;
+    key: string;
+    scale: string;
+    duration: number;
+    integrated_lufs: number;
+    true_peak_dbfs: number;
+    dynamic_range_db: number;
+    band_energy_profile: Record<string, number>;
+    sections: {
+        name: string;
+        start_time: number;
+        end_time: number;
+        start_bar: number;
+        end_bar: number;
+        avg_rms_db: number;
+        element_count: number;
+        characteristics: string[];
+    }[];
+    energy_curve: { bar: number; rms_db: number }[];
 }
 
-/* ── Stage Definitions ──────────────────────────────── */
+/* ── Pipeline stages ─────────────────────────────────── */
 
 const STAGES = [
-    { key: "load", label: "EAR", icon: "👂", desc: "Load reference analysis" },
-    { key: "plan", label: "BRAIN", icon: "🧠", desc: "Generate arrangement plan" },
-    { key: "grid", label: "GRID", icon: "📐", desc: "Compose MIDI patterns" },
+    { key: "ear", label: "EAR", icon: "👂", desc: "Separate + profile" },
+    { key: "plan", label: "BRAIN", icon: "🧠", desc: "Auto-detect structure" },
+    { key: "grid", label: "GRID", icon: "📐", desc: "Map MIDI patterns" },
     { key: "hands", label: "HANDS", icon: "🎹", desc: "Synthesize audio" },
     { key: "console", label: "CONSOLE", icon: "🎚️", desc: "Mix & master" },
-    { key: "qc", label: "QC", icon: "🔍", desc: "A/B comparison" },
+    { key: "qc", label: "QC", icon: "🔍", desc: "12D comparison" },
 ];
 
-/* ── Component ──────────────────────────────────────── */
+const QC_DIMENSIONS = [
+    "spectral_similarity", "rms_match", "stereo_width_match",
+    "bass_pattern_match", "kick_pattern_match", "harmonic_progression",
+    "energy_curve", "reverb_match", "dynamic_range",
+    "bpm_accuracy", "arrangement_match", "timbre_similarity",
+];
+
+/* ── Component ─────────────────────────────────────── */
 
 export default function ReconstructPage() {
-    const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
-    const [sections, setSections] = useState<Section[]>([]);
+    const [projectId, setProjectId] = useState("");
+    const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
     const [job, setJob] = useState<ReconstructJob | null>(null);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [reconstructing, setReconstructing] = useState(false);
     const [selectedSection, setSelectedSection] = useState<string | null>(null);
-
-    // Load blueprint data
-    useEffect(() => {
-        const loadData = async () => {
-            try {
-                const [bp, secs] = await Promise.all([
-                    api<Blueprint>("/api/reconstruct/blueprint"),
-                    api<Section[]>("/api/reconstruct/sections"),
-                ]);
-                setBlueprint(bp);
-                setSections(secs);
-            } catch {
-                // Offline — use static data
-            } finally {
-                setLoading(false);
-            }
-        };
-        loadData();
-    }, []);
 
     // Poll job status
     useEffect(() => {
@@ -105,29 +106,40 @@ export default function ReconstructPage() {
                 setJob(updated);
                 if (updated.status !== "running") {
                     setReconstructing(false);
+                    // Load analysis after completion
+                    if (updated.result?.analysis) {
+                        loadAnalysis(updated.project_id);
+                    }
                 }
-            } catch {
-                /* ignore */
-            }
-        }, 1000);
+            } catch { /* ignore */ }
+        }, 800);
         return () => clearInterval(interval);
     }, [job]);
 
+    const loadAnalysis = async (pid: string) => {
+        try {
+            const data = await api<AnalysisData>(`/api/reconstruct/analysis/${pid}`);
+            setAnalysis(data);
+        } catch { /* no analysis yet */ }
+    };
+
     const startReconstruction = useCallback(async () => {
+        if (!projectId.trim()) return;
         setReconstructing(true);
         try {
             const result = await api<ReconstructJob>("/api/reconstruct/start", {
                 method: "POST",
                 body: JSON.stringify({
-                    project_id: "million-pieces-benchmark",
+                    project_id: projectId.trim(),
                     mode: "full",
+                    separator: "auto",
                 }),
             });
-            setJob(result as unknown as ReconstructJob);
+            setJob(result);
         } catch {
             setReconstructing(false);
         }
-    }, []);
+    }, [projectId]);
 
     const getStageColor = (status: string) => {
         switch (status) {
@@ -147,20 +159,15 @@ export default function ReconstructPage() {
     };
 
     const getEnergyHeight = (rms: number) => {
-        const normalized = Math.max(0, Math.min(1, (rms + 25) / 20));
+        const normalized = Math.max(0, Math.min(1, (rms + 40) / 35));
         return `${Math.max(8, normalized * 100)}%`;
     };
 
-    if (loading) {
-        return (
-            <div className="flex items-center justify-center min-h-screen">
-                <div className="text-center space-y-4">
-                    <div className="text-4xl animate-pulse">🔬</div>
-                    <p className="text-zinc-400">Loading reconstruction blueprint...</p>
-                </div>
-            </div>
-        );
-    }
+    const formatTime = (seconds: number) => {
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${String(s).padStart(2, "0")}`;
+    };
 
     return (
         <div className="space-y-6 p-6">
@@ -171,49 +178,36 @@ export default function ReconstructPage() {
                         🔬 Reconstruct
                     </h1>
                     <p className="text-zinc-400 mt-1">
-                        Bar-by-bar track reconstruction — the ultimate production benchmark
+                        Upload any track → auto-detect everything → bar-by-bar reconstruction
                     </p>
                 </div>
-                <Button
-                    onClick={startReconstruction}
-                    disabled={reconstructing}
-                    className="bg-gradient-to-r from-amber-600 to-red-600 hover:from-amber-500 hover:to-red-500 text-white font-semibold px-6 py-3"
-                    size="lg"
-                >
-                    {reconstructing ? "⚡ Reconstructing..." : "🚀 Start Reconstruction"}
-                </Button>
             </div>
 
-            {/* Blueprint Info */}
-            {blueprint && (
-                <Card className="bg-zinc-900/50 border-zinc-800">
-                    <CardHeader>
-                        <CardTitle className="text-lg">
-                            🎵 {blueprint.profile.title}
-                        </CardTitle>
-                        <CardDescription>{blueprint.profile.artist}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="flex gap-3 flex-wrap">
-                            <Badge variant="outline" className="border-amber-500/30 text-amber-400">
-                                {blueprint.profile.bpm} BPM
-                            </Badge>
-                            <Badge variant="outline" className="border-emerald-500/30 text-emerald-400">
-                                Key: {blueprint.profile.key} {blueprint.profile.scale}
-                            </Badge>
-                            <Badge variant="outline" className="border-cyan-500/30 text-cyan-400">
-                                {blueprint.profile.total_bars} bars
-                            </Badge>
-                            <Badge variant="outline" className="border-purple-500/30 text-purple-400">
-                                {Math.floor(blueprint.profile.duration_s / 60)}:{String(Math.floor(blueprint.profile.duration_s % 60)).padStart(2, "0")}
-                            </Badge>
-                            <Badge variant="outline" className="border-zinc-500/30 text-zinc-400">
-                                {sections.length} sections
-                            </Badge>
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
+            {/* Project Input + Start */}
+            <Card className="bg-zinc-900/50 border-zinc-800">
+                <CardContent className="pt-6">
+                    <div className="flex gap-3">
+                        <input
+                            type="text"
+                            value={projectId}
+                            onChange={(e) => setProjectId(e.target.value)}
+                            placeholder="Enter project ID (from uploaded track)..."
+                            className="flex-1 rounded-lg bg-zinc-800 border border-zinc-700 px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-amber-500/50 focus:outline-none transition-colors"
+                        />
+                        <Button
+                            onClick={startReconstruction}
+                            disabled={reconstructing || !projectId.trim()}
+                            className="bg-gradient-to-r from-amber-600 to-red-600 hover:from-amber-500 hover:to-red-500 text-white font-semibold px-6"
+                            size="lg"
+                        >
+                            {reconstructing ? "⚡ Running..." : "🚀 Reconstruct"}
+                        </Button>
+                    </div>
+                    <p className="text-[11px] text-zinc-600 mt-2">
+                        Upload a track via Deconstructor → use the project ID here → full pipeline runs automatically
+                    </p>
+                </CardContent>
+            </Card>
 
             {/* Pipeline Stages */}
             {job && (
@@ -225,7 +219,9 @@ export default function ReconstructPage() {
                                 variant="outline"
                                 className={job.status === "completed"
                                     ? "border-emerald-500/30 text-emerald-400"
-                                    : "border-amber-500/30 text-amber-400"
+                                    : job.status === "error"
+                                        ? "border-red-500/30 text-red-400"
+                                        : "border-amber-500/30 text-amber-400"
                                 }
                             >
                                 {job.progress}%
@@ -236,7 +232,10 @@ export default function ReconstructPage() {
                         {/* Progress bar */}
                         <div className="w-full h-2 bg-zinc-800 rounded-full mb-6 overflow-hidden">
                             <div
-                                className="h-full bg-gradient-to-r from-amber-500 to-red-500 rounded-full transition-all duration-500"
+                                className={`h-full rounded-full transition-all duration-500 ${job.status === "error"
+                                        ? "bg-red-500"
+                                        : "bg-gradient-to-r from-amber-500 to-red-500"
+                                    }`}
                                 style={{ width: `${job.progress}%` }}
                             />
                         </div>
@@ -253,7 +252,7 @@ export default function ReconstructPage() {
                                         <div className="text-2xl mb-1">{stage.icon}</div>
                                         <div className="text-xs font-bold">{stage.label}</div>
                                         <div className="text-[10px] mt-1 opacity-70">
-                                            {status?.status === "completed" ? "✓" : status?.status === "running" ? "●" : "○"}
+                                            {status?.status === "completed" ? "✓" : status?.status === "running" ? "●" : status?.status === "error" ? "✗" : "○"}
                                         </div>
                                     </div>
                                 );
@@ -267,119 +266,204 @@ export default function ReconstructPage() {
                             </div>
                         )}
 
-                        {/* Result summary */}
+                        {/* Error message */}
+                        {job.status === "error" && (
+                            <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-center">
+                                <p className="text-red-400 text-sm">
+                                    ❌ {job.stages[job.stage]?.message || "Pipeline error"}
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Completion */}
                         {job.status === "completed" && job.result && (
                             <div className="mt-4 p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                                 <p className="text-emerald-400 font-semibold text-center">
-                                    ✅ Reconstruction complete — {(job.result as Record<string, unknown>).rendered_sections as number} sections rendered
+                                    ✅ Reconstruction complete — {job.result.rendered_sections} sections rendered
                                 </p>
+                                {job.result.analysis && (
+                                    <div className="flex gap-3 justify-center mt-3">
+                                        <Badge variant="outline" className="border-amber-500/30 text-amber-400">
+                                            {job.result.analysis.bpm.toFixed(1)} BPM
+                                        </Badge>
+                                        <Badge variant="outline" className="border-emerald-500/30 text-emerald-400">
+                                            {job.result.analysis.key} {job.result.analysis.scale}
+                                        </Badge>
+                                        <Badge variant="outline" className="border-cyan-500/30 text-cyan-400">
+                                            {job.result.analysis.sections_detected} sections
+                                        </Badge>
+                                        <Badge variant="outline" className="border-purple-500/30 text-purple-400">
+                                            {formatTime(job.result.analysis.duration)}
+                                        </Badge>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </CardContent>
                 </Card>
             )}
 
-            {/* Energy Map Visualization */}
-            {blueprint && (
-                <Card className="bg-zinc-900/50 border-zinc-800">
-                    <CardHeader>
-                        <CardTitle className="text-lg">📊 Energy Map</CardTitle>
-                        <CardDescription>
-                            RMS energy per 8-bar block — click to inspect
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="flex items-end gap-1 h-32">
-                            {blueprint.energy_map.map((point, i) => (
-                                <div
-                                    key={i}
-                                    className="flex-1 flex flex-col items-center gap-1 cursor-pointer group"
-                                    title={`Bar ${point.bar}: ${point.rms_db.toFixed(1)} dB — ${point.phase}`}
-                                >
-                                    <div
-                                        className={`w-full rounded-t transition-all group-hover:opacity-80 ${getEnergyColor(point.rms_db)}`}
-                                        style={{ height: getEnergyHeight(point.rms_db) }}
-                                    />
-                                    <span className="text-[8px] text-zinc-600 group-hover:text-zinc-400">
-                                        {point.bar}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="flex justify-between mt-2 text-[10px] text-zinc-600">
-                            <span>0:00</span>
-                            <span>Intro</span>
-                            <span>Groove</span>
-                            <span>Breakdown</span>
-                            <span>Drop</span>
-                            <span>Groove</span>
-                            <span>Outro</span>
-                            <span>5:32</span>
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
+            {/* Analysis Results — auto-detected data */}
+            {analysis && (
+                <>
+                    {/* Track DNA */}
+                    <Card className="bg-zinc-900/50 border-zinc-800">
+                        <CardHeader>
+                            <CardTitle className="text-lg">🧬 Track DNA</CardTitle>
+                            <CardDescription>Auto-detected — nothing hardcoded</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                                {[
+                                    { label: "BPM", value: analysis.tempo.toFixed(1), color: "text-amber-400" },
+                                    { label: "Key", value: `${analysis.key} ${analysis.scale}`, color: "text-emerald-400" },
+                                    { label: "Duration", value: formatTime(analysis.duration), color: "text-purple-400" },
+                                    { label: "LUFS", value: `${analysis.integrated_lufs.toFixed(1)}`, color: "text-cyan-400" },
+                                    { label: "Peak", value: `${analysis.true_peak_dbfs.toFixed(1)} dBFS`, color: "text-orange-400" },
+                                    { label: "Dyn Range", value: `${analysis.dynamic_range_db.toFixed(1)} dB`, color: "text-pink-400" },
+                                    { label: "Sections", value: `${analysis.sections.length}`, color: "text-zinc-300" },
+                                ].map((item) => (
+                                    <div key={item.label} className="text-center p-3 rounded-lg bg-zinc-800/50">
+                                        <div className={`text-lg font-bold ${item.color}`}>{item.value}</div>
+                                        <div className="text-[10px] text-zinc-500 mt-1">{item.label}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </CardContent>
+                    </Card>
 
-            {/* Section Detail Grid */}
-            <Card className="bg-zinc-900/50 border-zinc-800">
-                <CardHeader>
-                    <CardTitle className="text-lg">🎼 Sections</CardTitle>
-                    <CardDescription>
-                        {sections.length} sections — bar-by-bar arrangement blueprint
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {sections.map((section) => (
-                            <div
-                                key={section.name}
-                                className={`rounded-lg border p-4 cursor-pointer transition-all ${selectedSection === section.name
-                                        ? "border-amber-500/50 bg-amber-500/10"
-                                        : "border-zinc-800 bg-zinc-900/30 hover:border-zinc-700"
-                                    }`}
-                                onClick={() =>
-                                    setSelectedSection(
-                                        selectedSection === section.name ? null : section.name
-                                    )
-                                }
-                            >
-                                <div className="flex items-center justify-between mb-2">
-                                    <span className="font-semibold text-sm capitalize">
-                                        {section.name.replace(/_/g, " ")}
-                                    </span>
-                                    <Badge variant="outline" className="text-[10px] border-zinc-700">
-                                        {section.start_bar}–{section.end_bar}
-                                    </Badge>
-                                </div>
-                                <div className="flex gap-2 mb-2">
-                                    <span className="text-[10px] text-amber-400">
-                                        {section.rms_db.toFixed(1)} dB
-                                    </span>
-                                    <span className="text-[10px] text-cyan-400">
-                                        S/M: {section.stereo_sm.toFixed(3)}
-                                    </span>
-                                </div>
-                                <div className="flex flex-wrap gap-1">
-                                    {section.elements.map((el) => (
-                                        <Badge
-                                            key={el}
-                                            variant="secondary"
-                                            className="text-[9px] bg-zinc-800 text-zinc-400"
+                    {/* Energy Curve */}
+                    {analysis.energy_curve.length > 0 && (
+                        <Card className="bg-zinc-900/50 border-zinc-800">
+                            <CardHeader>
+                                <CardTitle className="text-lg">📊 Energy Map</CardTitle>
+                                <CardDescription>
+                                    Per-bar RMS energy — auto-detected from audio ({analysis.energy_curve.length} bars)
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="flex items-end gap-[1px] h-32">
+                                    {analysis.energy_curve.map((point, i) => (
+                                        <div
+                                            key={i}
+                                            className="flex-1 cursor-pointer group"
+                                            title={`Bar ${point.bar}: ${point.rms_db.toFixed(1)} dB`}
                                         >
-                                            {el}
-                                        </Badge>
+                                            <div
+                                                className={`w-full rounded-t transition-all group-hover:opacity-70 ${getEnergyColor(point.rms_db)}`}
+                                                style={{ height: getEnergyHeight(point.rms_db) }}
+                                            />
+                                        </div>
                                     ))}
                                 </div>
-                                {selectedSection === section.name && (
-                                    <p className="text-xs text-zinc-500 mt-3 leading-relaxed">
-                                        {section.description}
-                                    </p>
-                                )}
+                                <div className="flex justify-between mt-2 text-[10px] text-zinc-600">
+                                    <span>Bar 0</span>
+                                    <span>Bar {Math.floor(analysis.energy_curve.length / 2)}</span>
+                                    <span>Bar {analysis.energy_curve.length}</span>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Auto-Detected Sections */}
+                    <Card className="bg-zinc-900/50 border-zinc-800">
+                        <CardHeader>
+                            <CardTitle className="text-lg">🎼 Sections</CardTitle>
+                            <CardDescription>
+                                {analysis.sections.length} sections — auto-detected from energy analysis
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {analysis.sections.map((section, i) => (
+                                    <div
+                                        key={i}
+                                        className={`rounded-lg border p-4 cursor-pointer transition-all ${selectedSection === section.name + i
+                                                ? "border-amber-500/50 bg-amber-500/10"
+                                                : "border-zinc-800 bg-zinc-900/30 hover:border-zinc-700"
+                                            }`}
+                                        onClick={() =>
+                                            setSelectedSection(
+                                                selectedSection === section.name + i ? null : section.name + i
+                                            )
+                                        }
+                                    >
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="font-semibold text-sm">
+                                                {section.name}
+                                            </span>
+                                            <Badge variant="outline" className="text-[10px] border-zinc-700">
+                                                Bar {section.start_bar}–{section.end_bar}
+                                            </Badge>
+                                        </div>
+                                        <div className="flex gap-3 mb-2">
+                                            <span className="text-[10px] text-amber-400">
+                                                {section.avg_rms_db.toFixed(1)} dB
+                                            </span>
+                                            <span className="text-[10px] text-cyan-400">
+                                                {formatTime(section.start_time)} — {formatTime(section.end_time)}
+                                            </span>
+                                            <span className="text-[10px] text-purple-400">
+                                                {section.element_count} elements
+                                            </span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-1">
+                                            {section.characteristics.map((c) => (
+                                                <Badge
+                                                    key={c}
+                                                    variant="secondary"
+                                                    className="text-[9px] bg-zinc-800 text-zinc-400"
+                                                >
+                                                    {c}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
-                        ))}
-                    </div>
-                </CardContent>
-            </Card>
+                        </CardContent>
+                    </Card>
+
+                    {/* QC Dimensions Preview */}
+                    {job?.result?.qc && (
+                        <Card className="bg-zinc-900/50 border-zinc-800">
+                            <CardHeader>
+                                <CardTitle className="text-lg">🔍 QC — 12 Dimensions</CardTitle>
+                                <CardDescription>
+                                    Target: ≥{job.result.qc.target_score}% average score
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                                    {QC_DIMENSIONS.map((dim) => {
+                                        const score = job.result?.qc?.dimensions[dim] || 0;
+                                        return (
+                                            <div key={dim} className="rounded-lg bg-zinc-800/50 p-3">
+                                                <div className="text-[10px] text-zinc-500 capitalize">
+                                                    {dim.replace(/_/g, " ")}
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <div className="flex-1 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+                                                        <div
+                                                            className={`h-full rounded-full ${score >= 90 ? "bg-emerald-500" :
+                                                                    score >= 70 ? "bg-amber-500" : "bg-zinc-600"
+                                                                }`}
+                                                            style={{ width: `${score}%` }}
+                                                        />
+                                                    </div>
+                                                    <span className="text-[10px] text-zinc-400 w-6 text-right">
+                                                        {score}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+                </>
+            )}
 
             {/* 6-Layer Architecture Footer */}
             <div className="grid grid-cols-6 gap-2 text-center">
@@ -401,6 +485,11 @@ export default function ReconstructPage() {
                         </div>
                     </div>
                 ))}
+            </div>
+
+            {/* Footer */}
+            <div className="text-center text-zinc-600 text-xs py-2 border-t border-zinc-800/50">
+                100% Track-Agnostic — Upload any track, auto-detect everything, reconstruct bar-by-bar
             </div>
         </div>
     );
