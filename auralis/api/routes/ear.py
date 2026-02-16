@@ -187,13 +187,15 @@ async def _run_analysis(
         try:
             from auralis.ear.midi_extractor import extract_midi_from_stems
 
-            if stems_dir.exists():
+            if stems_dir.exists() and list(stems_dir.glob("*.wav")):
                 midi_results = await asyncio.to_thread(extract_midi_from_stems, stems_dir, midi_dir)
                 midi_result: dict[str, Any] = {k: v.to_dict() for k, v in midi_results.items()}
             else:
-                midi_result = {"info": "No stems available for MIDI extraction"}  # type: ignore[no-redef]
+                midi_result = {"info": "No stems available for MIDI extraction (GPU required for Demucs)"}  # type: ignore[no-redef]
         except ImportError:
-            midi_result = {"error": "basic-pitch not installed"}  # type: ignore[no-redef]
+            midi_result = {"info": "basic-pitch not installed (GPU required)"}  # type: ignore[no-redef]
+        except Exception as midi_err:
+            midi_result = {"error": f"MIDI extraction failed: {midi_err!s}"}  # type: ignore[no-redef]
 
         # Complete
         _jobs[job_id]["status"] = "complete"
