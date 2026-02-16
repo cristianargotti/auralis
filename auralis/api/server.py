@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from auralis.api.auth import get_current_user, login
+from auralis.api.routes.console import router as console_router
 from auralis.api.routes.ear import router as ear_router
 from auralis.api.routes.gpu import router as gpu_router
 from auralis.api.websocket import websocket_endpoint
@@ -35,6 +36,11 @@ app.include_router(
 )
 app.include_router(
     gpu_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    console_router,
     prefix="/api",
     dependencies=[Depends(get_current_user)],
 )
@@ -78,6 +84,12 @@ async def info() -> dict[str, object]:
             "ear_upload": "POST /api/ear/upload",
             "ear_analyze": "POST /api/ear/analyze/{project_id}",
             "ear_status": "GET /api/ear/status/{job_id}",
+            "console_master": "POST /api/console/master/{project_id}",
+            "console_qc": "GET /api/console/qc/{project_id}",
+            "console_presets": "GET /api/console/presets",
+            "gpu_status": "GET /api/gpu/status",
+            "gpu_start": "POST /api/gpu/start",
+            "gpu_stop": "POST /api/gpu/stop",
             "websocket": "WS /ws/{project_id}",
         },
     }
