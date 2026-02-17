@@ -11,6 +11,7 @@ services:
     volumes:
       - ml_models:/root/.cache    # Persist HTDemucs model weights (~320MB)
       - projects_data:/app/projects  # Persist separated stems & audio
+      - samples_data:/data/samples   # Organic sample packs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -48,3 +49,4 @@ volumes:
   caddy_config:
   ml_models:      # HTDemucs + torch hub weights
   projects_data:  # Stems, renders, mixes
+  samples_data:   # Organic sample packs
