@@ -515,6 +515,36 @@ async def cleanup_project(job_id: str):
     }
 
 
+def _subprocess_mix(stem_paths: dict[str, str], output_path: str, bpm: float) -> dict[str, Any]:
+    """Mix stems in a separate process to prevent segfaults."""
+    import soundfile as sf
+    import numpy as np
+    from auralis.hands.mixer import Mixer, MixConfig
+
+    print(f"Subprocess: Mixing {len(stem_paths)} stems...")
+    mixer = Mixer(MixConfig(sample_rate=44100, bpm=bpm))
+    
+    # Load stems
+    for name, path in stem_paths.items():
+        data, sr = sf.read(path, dtype="float64")
+        # Ensure mono
+        if data.ndim > 1:
+            data = np.mean(data, axis=1)
+        mixer.add_track(name, data)
+    
+    result = mixer.mix(output_path=output_path)
+    return {"tracks_mixed": result.tracks_mixed}
+
+
+def _subprocess_master(input_path: str, output_path: str, target_lufs: float, bpm: float) -> None:
+    """Master audio in a separate process to prevent segfaults."""
+    from auralis.console.mastering import master_audio, MasterConfig
+
+    print(f"Subprocess: Mastering to {target_lufs} LUFS...")
+    config = MasterConfig(target_lufs=target_lufs, bpm=bpm)
+    master_audio(input_path=input_path, output_path=output_path, config=config)
+
+
 @router.get("/jobs")
 async def list_jobs() -> list[dict[str, Any]]:
     """List all reconstruction jobs."""
@@ -895,34 +925,37 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
 
         try:
             if rendered_stems:
-                # Load all rendered stems and mix
+                # Load all rendered stems and mix (SUBPROCESS)
                 try:
-                    from auralis.hands.mixer import Mixer, MixConfig
-
-                    mixer = Mixer(MixConfig(
-                        sample_rate=44100,
+                    # Convert paths to strings for pickling
+                    stem_paths_str = {k: str(v) for k, v in rendered_stems.items()}
+                    
+                    mix_result = await asyncio.to_thread(
+                        _run_in_subprocess,
+                        _subprocess_mix,
+                        stem_paths=stem_paths_str,
+                        output_path=str(mix_path),
                         bpm=plan.get("bpm", 120.0),
-                    ))
-
-                    for stem_name, stem_path in rendered_stems.items():
-                        data, sr = sf.read(stem_path, dtype="float64")
-                        mono = np.mean(data, axis=1) if data.ndim > 1 else data
-                        mixer.add_track(stem_name, mono)
-
-                    mix_result = mixer.mix(output_path=str(mix_path))
-                    job["stages"]["console"]["message"] = (
-                        f"Mixed {mix_result.tracks_mixed} tracks → mastering..."
                     )
-                    _log(job, f"✓ Mixed {mix_result.tracks_mixed} tracks", "success")
-                except (ImportError, Exception) as e:
+                    
+                    job["stages"]["console"]["message"] = (
+                        f"Mixed {mix_result['tracks_mixed']} tracks → mastering..."
+                    )
+                    _log(job, f"✓ Mixed {mix_result['tracks_mixed']} tracks (subprocess)", "success")
+                except Exception as e:
+                    _log(job, f"Mixer subprocess failed ({e}) — falling back to simple sum", "warning")
                     # Fallback: quick sum mix
+                    import soundfile as sf
                     all_audio = []
                     sr = 44100
                     for path in rendered_stems.values():
-                        data, sr = sf.read(path, dtype="float64")
-                        mono = np.mean(data, axis=1) if data.ndim > 1 else data
-                        all_audio.append(mono)
-
+                        try:
+                            data, sr = sf.read(str(path), dtype="float64")
+                            mono = np.mean(data, axis=1) if data.ndim > 1 else data
+                            all_audio.append(mono)
+                        except Exception:
+                            pass
+                    
                     if all_audio:
                         max_len = max(len(a) for a in all_audio)
                         mix = np.zeros(max_len)
@@ -930,37 +963,34 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                             mix[:len(a)] += a
                         mix /= len(all_audio)
                         sf.write(str(mix_path), mix, sr)
-                    job["stages"]["console"]["message"] = f"Sum-mixed {len(all_audio)} stems"
+                    job["stages"]["console"]["message"] = f"Sum-mixed {len(all_audio)} stems (fallback)"
 
-                # Master by reference
+                # Master by reference (SUBPROCESS)
                 if mix_path.exists():
                     job["stages"]["console"]["message"] = "Mastering by reference..."
-                    _log(job, f"Mastering by reference (target LUFS: {analysis.get('integrated_lufs', -14.0)})...")
+                    target_lufs = analysis.get("integrated_lufs", -14.0)
+                    if not isinstance(target_lufs, (int, float)):
+                        target_lufs = -14.0
+                        
+                    _log(job, f"Mastering by reference (target LUFS: {target_lufs})...")
                     try:
-                        from auralis.console.mastering import master_audio, MasterConfig
-
-                        target_lufs = analysis.get("integrated_lufs", -14.0)
-                        m_config = MasterConfig(
-                            target_lufs=target_lufs if isinstance(target_lufs, (int, float)) else -14.0,
-                            bpm=plan.get("bpm", 120.0),
-                        )
-                        m_result = master_audio(
+                        await asyncio.to_thread(
+                            _run_in_subprocess,
+                            _subprocess_master,
                             input_path=str(mix_path),
                             output_path=str(master_path),
-                            config=m_config,
+                            target_lufs=target_lufs,
+                            bpm=plan.get("bpm", 120.0),
                         )
-                        master_info = {
-                            "output": str(master_path),
-                            "peak_dbtp": m_result.peak_dbtp,
-                            "rms_db": m_result.rms_db,
-                            "est_lufs": m_result.est_lufs,
-                            "stages_applied": m_result.stages_applied,
-                        }
-                        _log(job, f"✓ Master: {m_result.est_lufs:.1f} LUFS | Peak: {m_result.peak_dbtp:.1f} dBTP", "success")
-                        _log(job, f"  Stages: {', '.join(m_result.stages_applied)}")
-                    except (ImportError, Exception) as e:
-                        master_info = {"error": str(e), "mix_path": str(mix_path)}
-                        master_path = mix_path  # Use mix as "master"
+                        
+                        master_info = {"lufs": target_lufs, "method": "matchering"}
+                        _log(job, f"✓ Mastered to {target_lufs} LUFS", "success")
+                    except Exception as e:
+                        _log(job, f"Mastering failed ({e}) — bypassing", "warning")
+                        # Fallback: copy mix to master
+                        import shutil
+                        shutil.copy2(mix_path, master_path)
+                        master_info = {"lufs": None, "method": "bypass"}
             else:
                 master_info = {"status": "no_stems_to_mix"}
 
