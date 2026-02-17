@@ -598,6 +598,7 @@ def _subprocess_mix(
     bpm: float,
     stem_analysis: dict[str, Any] | None = None,
     ear_analysis: dict[str, Any] | None = None,
+    ref_targets: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Mix stems with professional per-stem processing driven by EAR analysis.
 
@@ -648,12 +649,13 @@ def _subprocess_mix(
         # Get per-stem analysis (or empty dict for fallback)
         sa = (stem_analysis or {}).get(name, {})
 
-        # Build intelligent recipe
+        # Build intelligent recipe (ref-targeted if bank has entries)
         recipe: StemRecipe = build_recipe_for_stem(
             stem_name=name,
             stem_analysis=sa,
             bpm=bpm,
             ear_data=ear_analysis,
+            ref_targets=ref_targets,
         )
 
         # Add track to mixer with recipe settings
@@ -1127,6 +1129,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         bpm=plan.get("bpm", 120.0),
                         stem_analysis=stem_analysis_data,
                         ear_analysis=ear_analysis_data,
+                        ref_targets=ref_targets if ref_targets else None,
                     )
 
                     # Log each recipe decision
