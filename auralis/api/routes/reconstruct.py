@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import json
+import multiprocessing
 import uuid
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,64 @@ _load_jobs()
 _save_jobs()  # persist any orphan→failed corrections
 
 
+def _run_in_subprocess(func, *args, **kwargs) -> Any:
+    """Run a function in a child process for full memory isolation.
+
+    When the child exits, the OS reclaims ALL its memory — including
+    C-level allocations from librosa, torch, numpy that gc.collect()
+    cannot free.  Results are serialized back via multiprocessing.Queue.
+    """
+    q: multiprocessing.Queue = multiprocessing.Queue()
+
+    def _target(q: multiprocessing.Queue) -> None:
+        try:
+            result = func(*args, **kwargs)
+            q.put(("ok", result))
+        except Exception as exc:
+            q.put(("error", str(exc)))
+
+    p = multiprocessing.Process(target=_target, args=(q,))
+    p.start()
+    p.join()  # blocks until child exits (all memory freed)
+
+    if q.empty():
+        raise RuntimeError(f"Subprocess died without result (exit code {p.exitcode})")
+    tag, payload = q.get_nowait()
+    if tag == "error":
+        raise RuntimeError(payload)
+    return payload
+
+
+# ── Subprocess wrappers (return plain dicts for queue serialization) ──
+
+def _subprocess_separate(audio_path, output_dir, model):
+    """Run separation in subprocess, return dict."""
+    from auralis.ear.separator import separate_track
+    result = separate_track(audio_path=audio_path, output_dir=output_dir, model=model)
+    return result.to_dict()
+
+
+def _subprocess_profile(audio_path):
+    """Run profiling in subprocess, return dict."""
+    from auralis.ear.profiler import profile_track
+    dna = profile_track(audio_path)
+    return dna.to_dict()
+
+
+def _subprocess_midi(stems_dir, output_dir):
+    """Run MIDI extraction in subprocess, return dict of dicts."""
+    from auralis.ear.midi_extractor import extract_midi_from_stems
+    results = extract_midi_from_stems(stems_dir=stems_dir, output_dir=output_dir)
+    return {k: v.to_dict() for k, v in results.items()}
+
+
+def _subprocess_qc(original_path, reconstruction_path):
+    """Run QC comparison in subprocess, return dict."""
+    from auralis.qc.comparator import compare_full
+    result = compare_full(original_path=original_path, reconstruction_path=reconstruction_path)
+    return result.to_dict()
+
+
 def _log(job: dict[str, Any], msg: str, level: str = "info") -> None:
     """Append a timestamped log entry to a job."""
     from datetime import datetime, timezone
@@ -97,7 +156,6 @@ def _log(job: dict[str, Any], msg: str, level: str = "info") -> None:
         "level": level,
         "msg": msg,
     })
-    _save_jobs()
 
 
 class SectionCompareRequest(BaseModel):
@@ -368,22 +426,25 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
             # Run separation (Mel-RoFormer primary, HTDemucs fallback)
             stems_dir = project_dir / "stems"
             try:
-                from auralis.ear.separator import separate_track
                 import time as _time
                 t0 = _time.monotonic()
 
-                sep_result = await asyncio.to_thread(
-                    separate_track,
+                sep_dict = await asyncio.to_thread(
+                    _run_in_subprocess,
+                    _subprocess_separate,
                     audio_path=audio_file,
                     output_dir=stems_dir,
                     model=req.separator,
                 )
                 elapsed = _time.monotonic() - t0
+
+                # Reconstruct lightweight stem info from dict
+                stem_paths = {k: Path(v) for k, v in sep_dict["stems"].items()}
                 job["stages"]["ear"]["message"] = (
-                    f"Separated {len(sep_result.stems)} stems via {sep_result.model_used}"
+                    f"Separated {len(stem_paths)} stems via {sep_dict['model_used']}"
                 )
-                _log(job, f"✓ Separated {len(sep_result.stems)} stems via {sep_result.model_used} ({elapsed:.0f}s)", "success")
-                for sname, spath in sep_result.stems.items():
+                _log(job, f"✓ Separated {len(stem_paths)} stems via {sep_dict['model_used']} ({elapsed:.0f}s)", "success")
+                for sname, spath in stem_paths.items():
                     _log(job, f"  📁 {sname}: {spath.stat().st_size / 1024 / 1024:.1f} MB")
 
                 # ── Free separation model memory ──
@@ -401,7 +462,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 original_rms = float(np.sqrt(np.mean(original_mono ** 2)))
                 del original_audio  # free stereo array immediately
 
-                for stem_name, stem_path in sep_result.stems.items():
+                for stem_name, stem_path in stem_paths.items():
                     try:
                         _log(job, f"  🔬 Analyzing {stem_name}...")
                         audio_data, stem_sr = sf.read(str(stem_path))
@@ -464,12 +525,9 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
             job["stages"]["ear"]["message"] = "Profiling track DNA..."
             _log(job, "Running track profiler (BPM, key, sections, energy)...")
             try:
-                from auralis.ear.profiler import profile_track
-
-                dna = profile_track(audio_file)
-                analysis = dna.to_dict()
-                del dna  # free TrackDNA object (contains numpy arrays)
-                gc.collect()
+                analysis = await asyncio.to_thread(
+                    _run_in_subprocess, _subprocess_profile, audio_file,
+                )
                 analysis_path = project_dir / "analysis.json"
                 analysis_path.write_text(json.dumps(analysis, indent=2, default=str))
                 _log(job, f"✓ Profile complete — {analysis.get('tempo', '?')} BPM, {analysis.get('key', '?')} {analysis.get('scale', '')}", "success")
@@ -479,21 +537,17 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 _log(job, f"Profiler error: {e}", "error")
 
             # Run MIDI extraction on tonal stems
-            if sep_result and stems_dir.exists():
+            if stems_dir.exists() and any(stems_dir.glob("*.wav")):
                 job["stages"]["ear"]["message"] = "Extracting MIDI from stems..."
                 _log(job, "Extracting MIDI from tonal stems (basic-pitch)...")
                 try:
-                    from auralis.ear.midi_extractor import extract_midi_from_stems
-
                     midi_dir = project_dir / "midi"
-                    midi_results = extract_midi_from_stems(
+                    analysis["midi_stems"] = await asyncio.to_thread(
+                        _run_in_subprocess,
+                        _subprocess_midi,
                         stems_dir=stems_dir,
                         output_dir=midi_dir,
                     )
-                    analysis["midi_stems"] = {
-                        k: v.to_dict() for k, v in midi_results.items()
-                    }
-                    del midi_results
                     _log(job, f"✓ MIDI extracted from {len(analysis['midi_stems'])} stems", "success")
                 except ImportError:
                     analysis["midi_stems"] = {"error": "basic-pitch not installed"}
@@ -503,7 +557,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     _log(job, f"MIDI extraction error: {e}", "error")
 
             # Free separation result reference
-            sep_result = None
+            stem_paths = None
             gc.collect()
             _save_jobs()  # checkpoint after full EAR stage
         else:
@@ -798,13 +852,12 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
 
         if audio_file and master_path.exists():
             try:
-                from auralis.qc.comparator import compare_full
-
-                comparison = compare_full(
+                qc_result = await asyncio.to_thread(
+                    _run_in_subprocess,
+                    _subprocess_qc,
                     original_path=str(audio_file),
                     reconstruction_path=str(master_path),
                 )
-                qc_result = comparison.to_dict()
 
                 # Save QC results
                 qc_path = project_dir / "qc_result.json"
