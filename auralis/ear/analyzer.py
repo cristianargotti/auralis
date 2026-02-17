@@ -596,61 +596,713 @@ def analyze_bass(bass_stem: Path) -> dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 🎤 VOCALS — REGION MAPPING (existing + enhanced)
+# 🎤 VOCALS — TYPE + REGIONS + EFFECT DETECTION
 # ─────────────────────────────────────────────────────────────────
 
-def detect_regions(stem_path: Path, label: str, threshold_db: float = -40) -> list[dict[str, Any]]:
-    """Detect regions of activity based on RMS energy."""
-    regions = []
+def analyze_vocals(vocal_stem: Path) -> dict[str, Any]:
+    """
+    Deep vocal analysis: region mapping, type classification, effect detection.
+    
+    Vocal Types:
+    - Lead: Highest energy, sustained pitch, dominant
+    - Backing: Lower energy, harmonic intervals
+    - Ad-lib: Short isolated bursts
+    - Vocal Chop: Ultra-short, rhythmic, no sustained pitch
+    
+    Effect Detection:
+    - Reverb Tail: Energy decay > 500ms after vocal offset
+    - Delay/Echo: Repeated patterns at regular intervals
+    - Pitch Shift: Unusual formant ratios
+    """
+    result: dict[str, Any] = {
+        "regions": [],
+        "effects": [],
+        "summary": {},
+    }
+    
     try:
-        y, sr = librosa.load(stem_path, sr=22050, mono=True)
+        y, sr = librosa.load(vocal_stem, sr=22050, mono=True)
+        duration = librosa.get_duration(y=y, sr=sr)
         hop_length = 512
+        
+        # Skip silent
+        rms_total = np.sqrt(np.mean(y ** 2))
+        if rms_total < 0.001:
+            return result
+        
+        # ── Region Detection with Classification ──
         rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop_length)[0]
         rms_db = librosa.amplitude_to_db(rms, ref=np.max)
         
+        threshold_db = -35
         active = rms_db > threshold_db
         active_padded = np.pad(active, 1, mode='constant')
         diff = np.diff(active_padded.astype(int))
         starts = np.where(diff == 1)[0]
         ends = np.where(diff == -1)[0]
         
-        for start, end in zip(starts, ends):
-            start_time = librosa.frames_to_time(start, sr=sr, hop_length=hop_length)
-            end_time = librosa.frames_to_time(end, sr=sr, hop_length=hop_length)
-            
-            if end_time - start_time > 0.5:
-                regions.append({
-                    "start": round(float(start_time), 3),
-                    "end": round(float(end_time), 3),
-                    "label": label
-                })
-        return regions
-    except Exception as e:
-        print(f"Error detecting regions in {stem_path}: {e}")
-        return []
-
-
-# ─────────────────────────────────────────────────────────────────
-# 🎹 OTHER — GENERIC EVENT DETECTION (enhanced)
-# ─────────────────────────────────────────────────────────────────
-
-def detect_events(stem_path: Path, label: str) -> list[dict[str, Any]]:
-    """Generic onset detection for any stem."""
-    events = []
-    try:
-        y, sr = librosa.load(stem_path, sr=22050, mono=True)
-        onset_times = librosa.onset.onset_detect(y=y, sr=sr, units='time')
+        # Pitch tracking for vocal type detection
+        f0, voiced_flag, _ = librosa.pyin(
+            y, fmin=librosa.note_to_hz('C2'),
+            fmax=librosa.note_to_hz('C6'), sr=sr
+        )
+        f0_times = librosa.times_like(f0, sr=sr)
         
-        for time in onset_times:
-            events.append({
-                "time": round(float(time), 3),
-                "label": label,
-                "energy": 0.0
+        # Global energy stats for relative classification
+        if len(rms) > 0:
+            energy_75th = float(np.percentile(rms[rms > 0], 75)) if np.any(rms > 0) else 0.01
+        else:
+            energy_75th = 0.01
+        
+        regions = []
+        for start_f, end_f in zip(starts, ends):
+            start_time = float(librosa.frames_to_time(start_f, sr=sr, hop_length=hop_length))
+            end_time = float(librosa.frames_to_time(end_f, sr=sr, hop_length=hop_length))
+            region_dur = end_time - start_time
+            
+            if region_dur < 0.1:
+                continue
+            
+            # Region energy
+            region_rms = rms[start_f:end_f]
+            avg_energy = float(np.mean(region_rms)) if len(region_rms) > 0 else 0.0
+            
+            # Pitch stability in region
+            time_mask = (f0_times >= start_time) & (f0_times <= end_time)
+            region_f0 = f0[time_mask]
+            region_voiced = voiced_flag[time_mask]
+            
+            voiced_ratio = float(np.mean(region_voiced)) if len(region_voiced) > 0 else 0.0
+            
+            pitch_stability = 0.0
+            if np.any(np.isfinite(region_f0[region_voiced])) and np.sum(region_voiced) > 2:
+                valid_f0 = region_f0[region_voiced & np.isfinite(region_f0)]
+                if len(valid_f0) > 1:
+                    pitch_stability = 1.0 - min(float(np.std(valid_f0) / np.mean(valid_f0)), 1.0)
+            
+            # Classify vocal type
+            vocal_type = "Lead"
+            confidence = 0.5
+            
+            if region_dur < 0.3 and voiced_ratio < 0.4:
+                vocal_type = "Vocal Chop"
+                confidence = 0.80
+            elif region_dur < 0.8 and avg_energy < energy_75th * 0.5:
+                vocal_type = "Ad-lib"
+                confidence = 0.70
+            elif avg_energy < energy_75th * 0.6 and pitch_stability > 0.5:
+                vocal_type = "Backing"
+                confidence = 0.65
+            elif avg_energy >= energy_75th * 0.6:
+                vocal_type = "Lead"
+                confidence = 0.75
+            
+            # Get average pitch for the region
+            avg_pitch = 0.0
+            avg_note = ""
+            if np.any(np.isfinite(region_f0[region_voiced])):
+                valid_f0 = region_f0[region_voiced & np.isfinite(region_f0)]
+                if len(valid_f0) > 0:
+                    avg_pitch = float(np.median(valid_f0))
+                    avg_midi = int(round(librosa.hz_to_midi(avg_pitch)))
+                    avg_note = librosa.midi_to_note(avg_midi)
+            
+            regions.append({
+                "start": round(start_time, 3),
+                "end": round(end_time, 3),
+                "label": vocal_type,
+                "confidence": round(confidence, 3),
+                "energy": round(avg_energy, 4),
+                "pitch_hz": round(avg_pitch, 1),
+                "note": avg_note,
+                "voiced_ratio": round(voiced_ratio, 3),
+                "pitch_stability": round(pitch_stability, 3),
             })
-        return events
+        
+        result["regions"] = regions
+        
+        # ── Effect Detection ──
+        effects = []
+        
+        # Reverb tail detection: look for energy that decays slowly after vocal regions
+        for i, region in enumerate(regions):
+            end_sample = int(region["end"] * sr)
+            tail_end = min(len(y), end_sample + int(1.5 * sr))  # 1.5s after region
+            tail = y[end_sample:tail_end]
+            
+            if len(tail) > sr // 4:
+                tail_rms = librosa.feature.rms(y=tail, frame_length=2048, hop_length=256)[0]
+                if len(tail_rms) > 4:
+                    # Check for slow decay (reverb signature)
+                    first_quarter = float(np.mean(tail_rms[:len(tail_rms)//4]))
+                    last_quarter = float(np.mean(tail_rms[-len(tail_rms)//4:]))
+                    
+                    if first_quarter > 0.005 and last_quarter > 0.001 and first_quarter > last_quarter:
+                        decay_ratio = last_quarter / first_quarter
+                        if decay_ratio > 0.1:  # Still audible = reverb
+                            effects.append({
+                                "type": "Reverb Tail",
+                                "time": round(region["end"], 3),
+                                "duration": round(float(tail_end / sr - region["end"]), 3),
+                                "intensity": round(decay_ratio, 3),
+                            })
+        
+        # Delay detection: autocorrelation of envelope for periodic patterns
+        if len(y) > sr:
+            env = librosa.feature.rms(y=y, frame_length=2048, hop_length=256)[0]
+            if len(env) > 100:
+                env_centered = env - np.mean(env)
+                autocorr = np.correlate(env_centered, env_centered, mode='full')
+                autocorr = autocorr[len(autocorr)//2:]
+                if len(autocorr) > 1 and autocorr[0] > 0:
+                    autocorr = autocorr / autocorr[0]
+                    
+                    # Look for peaks in autocorrelation (delay echoes)
+                    min_delay_frames = int(0.1 * sr / 256)   # Min 100ms delay
+                    max_delay_frames = int(1.0 * sr / 256)    # Max 1s delay
+                    
+                    search_region = autocorr[min_delay_frames:max_delay_frames]
+                    if len(search_region) > 0:
+                        peak_val = float(np.max(search_region))
+                        if peak_val > 0.3:  # Strong periodic repetition
+                            peak_idx = int(np.argmax(search_region)) + min_delay_frames
+                            delay_time_ms = round(peak_idx * 256 / sr * 1000)
+                            effects.append({
+                                "type": "Delay/Echo",
+                                "delay_ms": delay_time_ms,
+                                "strength": round(peak_val, 3),
+                            })
+        
+        result["effects"] = effects
+        
+        # ── Summary ──
+        type_counts: dict[str, int] = {}
+        for r in regions:
+            t = r["label"]
+            type_counts[t] = type_counts.get(t, 0) + 1
+        
+        result["summary"] = {
+            "total_regions": len(regions),
+            "total_duration": round(sum(r["end"] - r["start"] for r in regions), 2),
+            "types": type_counts,
+            "effects_detected": [e["type"] for e in effects],
+            "has_reverb": any(e["type"] == "Reverb Tail" for e in effects),
+            "has_delay": any(e["type"] == "Delay/Echo" for e in effects),
+        }
+        
+        return result
     except Exception as e:
-        print(f"Error detecting events in {stem_path}: {e}")
-        return []
+        print(f"Error analyzing vocals in {vocal_stem}: {e}")
+        return result
+
+
+# ─────────────────────────────────────────────────────────────────
+# 🎹 OTHER — INSTRUMENT + SYNTH + FX CLASSIFICATION
+# ─────────────────────────────────────────────────────────────────
+
+# Spectral profiles for "Other" stem elements
+OTHER_PROFILES = {
+    # ── Instruments ──
+    "Pad": {
+        "onset_strength_max": 0.3,    # Slow attack
+        "duration_min_ms": 500,        # Sustained
+        "bandwidth_min": 500,          # Wide
+        "spectral_flatness_max": 0.3,  # Tonal
+        "zcr_max": 0.15,
+    },
+    "Lead": {
+        "centroid_min": 800,
+        "centroid_max": 6000,
+        "bandwidth_max": 3000,         # Focused
+        "pitched": True,
+        "spectral_flatness_max": 0.25,
+    },
+    "Pluck": {
+        "onset_strength_min": 0.5,     # Sharp attack
+        "decay_max_ms": 300,           # Fast decay
+        "pitched": True,
+        "spectral_flatness_max": 0.3,
+    },
+    "Arp": {
+        "onset_regularity_min": 0.6,   # Regular rhythmic pattern
+        "pitched": True,
+        "note_density_min": 4,         # Many notes per second
+    },
+    "Piano": {
+        "onset_strength_min": 0.4,     # Hammer attack
+        "harmonic_ratio_min": 0.4,     # Rich harmonics
+        "centroid_range": (300, 4000),
+        "spectral_flatness_max": 0.15, # Very tonal
+    },
+    "Guitar": {
+        "harmonic_ratio_min": 0.3,
+        "centroid_range": (400, 5000),
+        "spectral_flatness_max": 0.2,
+        "bandwidth_max": 4000,
+    },
+    "Strings": {
+        "onset_strength_max": 0.3,     # Slow attack
+        "duration_min_ms": 1000,       # Very sustained
+        "centroid_range": (200, 4000),
+        "spectral_flatness_max": 0.2,
+    },
+    # ── FX ──
+    "Riser": {
+        "energy_slope_positive": True,  # Increasing energy over time
+        "centroid_slope_positive": True, # Rising pitch
+        "duration_min_ms": 1000,
+    },
+    "Sweep": {
+        "centroid_variance_high": True,  # Moving spectral peak
+        "duration_min_ms": 500,
+    },
+    "Impact": {
+        "onset_strength_min": 0.7,      # Sudden burst
+        "bandwidth_min": 3000,           # Broadband
+        "decay_max_ms": 500,             # Fast decay
+    },
+    "White Noise": {
+        "spectral_flatness_min": 0.7,    # Near-uniform spectrum
+        "zcr_min": 0.3,
+    },
+    "Reverse": {
+        "energy_slope_positive": True,   # Increasing amplitude
+        "centroid_slope_positive": True,
+        "duration_max_ms": 2000,
+    },
+}
+
+
+def _classify_other_region(y: np.ndarray, sr: int, start_sample: int, end_sample: int) -> tuple[str, float]:
+    """Classify a segment of the 'other' stem into instrument/synth/FX type."""
+    segment = y[start_sample:end_sample]
+    seg_dur_ms = len(segment) / sr * 1000
+    
+    if len(segment) < 512:
+        return "Unknown", 0.0
+    
+    n_fft = min(2048, len(segment))
+    
+    # Extract features
+    centroid = float(np.mean(librosa.feature.spectral_centroid(y=segment, sr=sr, n_fft=n_fft)))
+    bandwidth = float(np.mean(librosa.feature.spectral_bandwidth(y=segment, sr=sr, n_fft=n_fft)))
+    flatness = float(np.mean(librosa.feature.spectral_flatness(y=segment, n_fft=n_fft)))
+    zcr = float(np.mean(librosa.feature.zero_crossing_rate(y=segment)))
+    
+    # Onset strength (attack sharpness)
+    onset_env = librosa.onset.onset_strength(y=segment, sr=sr)
+    onset_strength = float(np.max(onset_env)) if len(onset_env) > 0 else 0.0
+    # Normalize onset strength
+    onset_strength = min(onset_strength / 10.0, 1.0)
+    
+    # Energy envelope slope (for risers/reverses)
+    rms_env = librosa.feature.rms(y=segment, frame_length=min(2048, len(segment)), hop_length=256)[0]
+    energy_slope = 0.0
+    if len(rms_env) > 2:
+        x_axis = np.arange(len(rms_env))
+        try:
+            coeffs = np.polyfit(x_axis, rms_env, 1)
+            energy_slope = float(coeffs[0])
+        except Exception:
+            pass
+    
+    # Centroid slope (for sweeps/risers)
+    centroid_series = librosa.feature.spectral_centroid(y=segment, sr=sr, n_fft=n_fft)[0]
+    centroid_slope = 0.0
+    centroid_variance = 0.0
+    if len(centroid_series) > 2:
+        try:
+            x_axis = np.arange(len(centroid_series))
+            coeffs = np.polyfit(x_axis, centroid_series, 1)
+            centroid_slope = float(coeffs[0])
+            centroid_variance = float(np.std(centroid_series) / max(np.mean(centroid_series), 1))
+        except Exception:
+            pass
+    
+    # Harmonic ratio
+    S = np.abs(librosa.stft(segment, n_fft=n_fft))
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    fund_mask = freqs <= 500
+    harm_mask = (freqs > 500) & (freqs <= 8000)
+    fund_e = float(np.sum(S[fund_mask, :])) if np.any(fund_mask) else 0.0
+    harm_e = float(np.sum(S[harm_mask, :])) if np.any(harm_mask) else 0.0
+    total_e = fund_e + harm_e
+    harmonic_ratio = harm_e / total_e if total_e > 0 else 0.0
+    
+    # Pitch detection (for tonal vs noise)
+    try:
+        f0_check, voiced_check, _ = librosa.pyin(
+            segment, fmin=librosa.note_to_hz('C2'),
+            fmax=librosa.note_to_hz('C7'), sr=sr
+        )
+        is_pitched = float(np.mean(voiced_check)) > 0.3
+    except Exception:
+        is_pitched = False
+    
+    # Decay measurement
+    decay_ms = seg_dur_ms  # Default
+    if len(rms_env) > 4:
+        peak_idx = np.argmax(rms_env)
+        post_peak = rms_env[peak_idx:]
+        if len(post_peak) > 1 and post_peak[0] > 0:
+            thresh = post_peak[0] * 0.1
+            below = np.where(post_peak < thresh)[0]
+            if len(below) > 0:
+                decay_ms = float(below[0] * 256 / sr * 1000)
+    
+    # ── Classification Decision Tree ──
+    
+    # FX first — they have distinctive signatures
+    if flatness > 0.65 and zcr > 0.25:
+        return "White Noise", round(min(flatness, 0.95), 3)
+    
+    if energy_slope > 0.001 and seg_dur_ms > 800:
+        if centroid_slope > 5.0:
+            return "Riser", round(min(0.5 + energy_slope * 100, 0.9), 3)
+        else:
+            return "Reverse", round(0.65, 3)
+    
+    if centroid_variance > 0.4 and seg_dur_ms > 400:
+        return "Sweep", round(min(0.5 + centroid_variance, 0.9), 3)
+    
+    if onset_strength > 0.6 and bandwidth > 3000 and decay_ms < 400:
+        return "Impact", round(min(0.5 + onset_strength, 0.9), 3)
+    
+    # Instruments
+    if onset_strength < 0.25 and seg_dur_ms > 800:
+        if bandwidth > 500:
+            return "Pad", round(0.70, 3)
+        else:
+            return "Strings", round(0.60, 3)
+    
+    if onset_strength < 0.25 and seg_dur_ms > 1500:
+        return "Strings", round(0.65, 3)
+    
+    if flatness < 0.15 and is_pitched and harmonic_ratio > 0.35:
+        if onset_strength > 0.35:
+            return "Piano", round(0.65, 3)
+        else:
+            return "Guitar", round(0.55, 3)
+    
+    if onset_strength > 0.4 and decay_ms < 250 and is_pitched:
+        return "Pluck", round(0.70, 3)
+    
+    if is_pitched and centroid > 800:
+        return "Lead", round(0.60, 3)
+    
+    if is_pitched and centroid <= 800:
+        return "Guitar", round(0.50, 3)
+    
+    # Fallback
+    return "Synth", round(0.40, 3)
+
+
+def analyze_other(other_stem: Path) -> dict[str, Any]:
+    """
+    Deep analysis of 'Other' stem: instruments, synths, and FX.
+    
+    Classifies every significant region into:
+    Instruments: Pad, Lead, Pluck, Arp, Piano, Guitar, Strings
+    FX: Riser, Sweep, Impact, White Noise, Reverse
+    """
+    result: dict[str, Any] = {
+        "events": [],
+        "summary": {},
+    }
+    
+    try:
+        y, sr = librosa.load(other_stem, sr=22050, mono=True)
+        hop_length = 512
+        
+        # Skip silent
+        rms_total = np.sqrt(np.mean(y ** 2))
+        if rms_total < 0.001:
+            return result
+        
+        # Detect regions of activity using RMS
+        rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop_length)[0]
+        rms_db = librosa.amplitude_to_db(rms, ref=np.max)
+        
+        threshold_db = -35
+        active = rms_db > threshold_db
+        active_padded = np.pad(active, 1, mode='constant')
+        diff = np.diff(active_padded.astype(int))
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0]
+        
+        events = []
+        for start_f, end_f in zip(starts, ends):
+            start_time = float(librosa.frames_to_time(start_f, sr=sr, hop_length=hop_length))
+            end_time = float(librosa.frames_to_time(end_f, sr=sr, hop_length=hop_length))
+            region_dur = end_time - start_time
+            
+            if region_dur < 0.15:
+                continue
+            
+            start_sample = int(start_time * sr)
+            end_sample = int(end_time * sr)
+            
+            # Classify the region
+            label, confidence = _classify_other_region(y, sr, start_sample, end_sample)
+            
+            # Get pitch if tonal
+            pitch_hz = 0.0
+            note_name = ""
+            try:
+                segment = y[start_sample:end_sample]
+                if len(segment) > 2048:
+                    f0, voiced, _ = librosa.pyin(
+                        segment, fmin=librosa.note_to_hz('C2'),
+                        fmax=librosa.note_to_hz('C7'), sr=sr
+                    )
+                    valid = f0[voiced & np.isfinite(f0)]
+                    if len(valid) > 0:
+                        pitch_hz = float(np.median(valid))
+                        midi_note = int(round(librosa.hz_to_midi(pitch_hz)))
+                        note_name = librosa.midi_to_note(midi_note)
+            except Exception:
+                pass
+            
+            # Region energy
+            region_rms = rms[start_f:end_f]
+            energy = float(np.mean(region_rms)) if len(region_rms) > 0 else 0.0
+            
+            events.append({
+                "start": round(start_time, 3),
+                "end": round(end_time, 3),
+                "label": label,
+                "confidence": round(confidence, 3),
+                "energy": round(energy, 4),
+                "pitch_hz": round(pitch_hz, 1),
+                "note": note_name,
+                "duration": round(region_dur, 3),
+            })
+        
+        result["events"] = events
+        
+        # Summary
+        type_counts: dict[str, int] = {}
+        fx_types = {"Riser", "Sweep", "Impact", "White Noise", "Reverse"}
+        instrument_list = []
+        fx_list = []
+        
+        for ev in events:
+            label = ev["label"]
+            type_counts[label] = type_counts.get(label, 0) + 1
+            if label in fx_types:
+                fx_list.append(label)
+            else:
+                instrument_list.append(label)
+        
+        result["summary"] = {
+            "total_elements": len(events),
+            "types": type_counts,
+            "unique_types": len(type_counts),
+            "instruments_detected": list(set(instrument_list)),
+            "fx_detected": list(set(fx_list)),
+        }
+        
+        return result
+    except Exception as e:
+        print(f"Error analyzing other stem in {other_stem}: {e}")
+        return result
+
+
+# ─────────────────────────────────────────────────────────────────
+# 🔗 CROSS-STEM INTELLIGENCE
+# ─────────────────────────────────────────────────────────────────
+
+def analyze_arrangement(project_dir: Path) -> dict[str, Any]:
+    """
+    Cross-stem analysis for arrangement structure, key detection, and sidechain.
+    
+    Detects:
+    - Song sections (Intro, Verse, Chorus, Bridge, Drop, Outro)
+    - Musical key and scale
+    - Sidechain compression patterns
+    - Tempo and tempo variations
+    """
+    result: dict[str, Any] = {
+        "sections": [],
+        "key": "",
+        "scale": "",
+        "tempo_bpm": 0.0,
+        "tempo_stable": True,
+        "sidechain_detected": False,
+        "sidechain_pattern": "",
+    }
+    
+    try:
+        original_path = project_dir / "original.wav"
+        if not original_path.exists():
+            return result
+        
+        y, sr = librosa.load(original_path, sr=22050, mono=True)
+        duration = librosa.get_duration(y=y, sr=sr)
+        
+        # ── Key Detection via Chroma ──
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+        chroma_avg = np.mean(chroma, axis=1)
+        
+        pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        
+        # Key detection using Krumhansl-Kessler key profiles
+        major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+        minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+        
+        best_key = "C"
+        best_scale = "Major"
+        best_corr = -1.0
+        
+        for shift in range(12):
+            rolled = np.roll(chroma_avg, -shift)
+            
+            # Major correlation
+            corr_major = float(np.corrcoef(rolled, major_profile)[0, 1])
+            if corr_major > best_corr:
+                best_corr = corr_major
+                best_key = pitch_classes[shift]
+                best_scale = "Major"
+            
+            # Minor correlation
+            corr_minor = float(np.corrcoef(rolled, minor_profile)[0, 1])
+            if corr_minor > best_corr:
+                best_corr = corr_minor
+                best_key = pitch_classes[shift]
+                best_scale = "Minor"
+        
+        result["key"] = best_key
+        result["scale"] = best_scale
+        
+        # ── Tempo Detection ──
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        if np.isscalar(tempo):
+            result["tempo_bpm"] = round(float(tempo), 1)
+        else:
+            result["tempo_bpm"] = round(float(tempo[0]), 1) if len(tempo) > 0 else 0.0
+        
+        # ── Arrangement Sections ──
+        # Use spectral changes to detect section boundaries
+        hop = 512
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=12, hop_length=hop)
+        
+        # Segment using structural features (self-similarity)
+        # Simple approach: divide into segments by energy profile changes
+        segment_duration = 8.0  # 8-second analysis windows
+        segment_frames = int(segment_duration * sr / hop)
+        n_segments = max(1, mfcc.shape[1] // segment_frames)
+        
+        segment_features = []
+        for i in range(n_segments):
+            start_f = i * segment_frames
+            end_f = min((i + 1) * segment_frames, mfcc.shape[1])
+            seg_mfcc = mfcc[:, start_f:end_f]
+            
+            # Average MFCC + energy for this segment
+            avg_mfcc = np.mean(seg_mfcc, axis=1)
+            
+            seg_start = i * segment_duration
+            seg_end = min((i + 1) * segment_duration, duration)
+            
+            # Energy of segment
+            seg_start_sample = int(seg_start * sr)
+            seg_end_sample = min(int(seg_end * sr), len(y))
+            seg_audio = y[seg_start_sample:seg_end_sample]
+            seg_energy = float(np.sqrt(np.mean(seg_audio ** 2))) if len(seg_audio) > 0 else 0.0
+            
+            segment_features.append({
+                "start": round(seg_start, 1),
+                "end": round(seg_end, 1),
+                "energy": seg_energy,
+                "mfcc_mean": avg_mfcc.tolist(),
+            })
+        
+        # Classify sections based on energy patterns
+        if segment_features:
+            energies = [s["energy"] for s in segment_features]
+            max_energy = max(energies) if energies else 1.0
+            if max_energy == 0:
+                max_energy = 1.0
+            
+            sections = []
+            for i, seg in enumerate(segment_features):
+                rel_energy = seg["energy"] / max_energy
+                position_ratio = seg["start"] / max(duration, 1)
+                
+                # Heuristic section classification
+                if position_ratio < 0.08:
+                    section_type = "Intro"
+                elif position_ratio > 0.92:
+                    section_type = "Outro"
+                elif rel_energy > 0.75:
+                    section_type = "Drop" if i > 0 and energies[i-1] / max_energy < 0.5 else "Chorus"
+                elif rel_energy < 0.35:
+                    if position_ratio < 0.5:
+                        section_type = "Verse"
+                    else:
+                        section_type = "Bridge"
+                elif rel_energy < 0.55:
+                    # Check if energy is building up
+                    if i < len(energies) - 1 and energies[i+1] / max_energy > rel_energy + 0.2:
+                        section_type = "Build"
+                    else:
+                        section_type = "Verse"
+                else:
+                    section_type = "Chorus"
+                
+                # Merge adjacent same-type sections
+                if sections and sections[-1]["label"] == section_type:
+                    sections[-1]["end"] = seg["end"]
+                else:
+                    sections.append({
+                        "start": seg["start"],
+                        "end": seg["end"],
+                        "label": section_type,
+                        "energy": round(rel_energy, 3),
+                    })
+            
+            result["sections"] = sections
+        
+        # ── Sidechain Detection ──
+        # Look for periodic amplitude dips in bass/other that correlate with kick pattern
+        stems_dir = project_dir / "stems"
+        bass_path = stems_dir / "bass.wav" if stems_dir.exists() else None
+        drums_path = stems_dir / "drums.wav" if stems_dir.exists() else None
+        
+        if bass_path and bass_path.exists() and drums_path and drums_path.exists():
+            try:
+                y_bass, sr_b = librosa.load(bass_path, sr=22050, mono=True)
+                y_drums, sr_d = librosa.load(drums_path, sr=22050, mono=True)
+                
+                min_len = min(len(y_bass), len(y_drums))
+                y_bass = y_bass[:min_len]
+                y_drums = y_drums[:min_len]
+                
+                # Get bass and drum envelopes
+                bass_env = librosa.feature.rms(y=y_bass, frame_length=1024, hop_length=256)[0]
+                drum_env = librosa.feature.rms(y=y_drums, frame_length=1024, hop_length=256)[0]
+                
+                min_env_len = min(len(bass_env), len(drum_env))
+                bass_env = bass_env[:min_env_len]
+                drum_env = drum_env[:min_env_len]
+                
+                if len(bass_env) > 100:
+                    # Sidechain signature: bass drops when drums peak
+                    # Compute anti-correlation
+                    if np.std(bass_env) > 0 and np.std(drum_env) > 0:
+                        correlation = float(np.corrcoef(bass_env, drum_env)[0, 1])
+                        
+                        if correlation < -0.15:
+                            result["sidechain_detected"] = True
+                            result["sidechain_pattern"] = "Kick-triggered duck"
+                            result["sidechain_strength"] = round(abs(correlation), 3)
+            except Exception:
+                pass
+        
+        return result
+    except Exception as e:
+        print(f"Error analyzing arrangement: {e}")
+        return result
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -661,11 +1313,12 @@ def analyze_track_layers(project_dir: Path) -> dict[str, Any]:
     """
     Full-spectrum track analysis for X-Ray visualization.
     
-    Analyzes each Demucs stem to extract:
+    Analyzes each Demucs stem to extract EVERYTHING in the track:
     - Drums: 12-class percussion events with confidence scores
-    - Bass: Type classification + note-by-note pitch tracking
-    - Vocals: Region mapping
-    - Other: Event detection
+    - Bass: Type classification + note-by-note pitch tracking + style
+    - Vocals: Lead/Backing/Ad-lib/Chop regions + reverb/delay detection
+    - Other: Instrument (pad/lead/pluck/arp/piano/guitar/strings) + FX (riser/sweep/impact/noise)
+    - Arrangement: Sections + key/scale + tempo + sidechain
     """
     result: dict[str, Any] = {
         "duration": 0.0,
@@ -707,7 +1360,6 @@ def analyze_track_layers(project_dir: Path) -> dict[str, Any]:
         print("[Analyzer] 🎸 Analyzing bass (type + pitch + style)...")
         bass_data = analyze_bass(bass_path)
         
-        # Convert bass notes to event format for the X-Ray layer
         bass_events = []
         for note in bass_data.get("notes", []):
             bass_events.append({
@@ -734,35 +1386,66 @@ def analyze_track_layers(project_dir: Path) -> dict[str, Any]:
               f"({bass_data['type_confidence']:.0%} confidence), "
               f"{bass_data['summary'].get('total_notes', 0)} notes")
 
-    # ── 3. VOCALS — Region Mapping ──
+    # ── 3. VOCALS — Type + Regions + Effects ──
     vocals_path = stems_dir / "vocals.wav"
     if vocals_path.exists():
-        print("[Analyzer] 🎤 Mapping vocal regions...")
-        vocal_regions = detect_regions(vocals_path, "Vocals")
+        print("[Analyzer] 🎤 Analyzing vocals (type + regions + effects)...")
+        vocal_data = analyze_vocals(vocals_path)
+        
         result["layers"].append({
             "name": "Vocals",
             "type": "region",
-            "events": vocal_regions,
+            "events": vocal_data.get("regions", []),
         })
-        result["analysis"]["vocals"] = {
-            "total_regions": len(vocal_regions),
-            "total_duration": round(sum(r["end"] - r["start"] for r in vocal_regions), 2),
-        }
-        print(f"[Analyzer] ✅ Vocals: {len(vocal_regions)} regions")
+        result["analysis"]["vocals"] = vocal_data.get("summary", {})
+        result["analysis"]["vocal_effects"] = vocal_data.get("effects", [])
+        
+        summary = vocal_data.get("summary", {})
+        types = summary.get("types", {})
+        effects = summary.get("effects_detected", [])
+        print(f"[Analyzer] ✅ Vocals: {summary.get('total_regions', 0)} regions "
+              f"({', '.join(f'{k}:{v}' for k, v in types.items())}), "
+              f"Effects: {effects if effects else 'none'}")
 
-    # ── 4. OTHER — Event Detection ──
+    # ── 4. OTHER — Instruments + Synths + FX ──
     other_path = stems_dir / "other.wav"
     if other_path.exists():
-        print("[Analyzer] 🎹 Detecting elements in Other stem...")
-        other_events = detect_events(other_path, "Synth/FX")
+        print("[Analyzer] 🎹 Analyzing Other stem (instruments + synths + FX)...")
+        other_data = analyze_other(other_path)
+        
         result["layers"].append({
             "name": "Other",
-            "type": "point",
-            "events": other_events,
+            "type": "region",
+            "events": other_data.get("events", []),
         })
-        result["analysis"]["other"] = {
-            "total_events": len(other_events),
-        }
-        print(f"[Analyzer] ✅ Other: {len(other_events)} events")
+        result["analysis"]["other"] = other_data.get("summary", {})
+        
+        summary = other_data.get("summary", {})
+        instruments = summary.get("instruments_detected", [])
+        fx = summary.get("fx_detected", [])
+        print(f"[Analyzer] ✅ Other: {summary.get('total_elements', 0)} elements — "
+              f"Instruments: {instruments}, FX: {fx}")
 
+    # ── 5. CROSS-STEM — Arrangement + Key + Sidechain ──
+    print("[Analyzer] 🔗 Analyzing arrangement (sections + key + sidechain)...")
+    arrangement = analyze_arrangement(project_dir)
+    
+    result["analysis"]["arrangement"] = {
+        "sections": arrangement.get("sections", []),
+        "key": arrangement.get("key", ""),
+        "scale": arrangement.get("scale", ""),
+        "tempo_bpm": arrangement.get("tempo_bpm", 0.0),
+        "sidechain_detected": arrangement.get("sidechain_detected", False),
+        "sidechain_pattern": arrangement.get("sidechain_pattern", ""),
+    }
+    
+    key = arrangement.get("key", "?")
+    scale = arrangement.get("scale", "?")
+    tempo = arrangement.get("tempo_bpm", 0)
+    n_sections = len(arrangement.get("sections", []))
+    sidechain = "YES" if arrangement.get("sidechain_detected") else "no"
+    print(f"[Analyzer] ✅ Arrangement: {key} {scale}, {tempo} BPM, "
+          f"{n_sections} sections, sidechain: {sidechain}")
+
+    print("[Analyzer] 🧬 Track DNA extraction complete.")
     return result
