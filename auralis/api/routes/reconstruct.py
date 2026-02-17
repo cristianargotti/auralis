@@ -8,6 +8,7 @@ No hardcoded references — everything derived from the uploaded audio.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import uuid
 from pathlib import Path
@@ -385,6 +386,10 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 for sname, spath in sep_result.stems.items():
                     _log(job, f"  📁 {sname}: {spath.stat().st_size / 1024 / 1024:.1f} MB")
 
+                # ── Free separation model memory ──
+                gc.collect()
+                _save_jobs()  # checkpoint after separation
+
                 # ── Per-stem analysis ──
                 _log(job, "Analyzing separated stems (RMS, peak, FFT)...")
                 stem_analysis: dict[str, Any] = {}
@@ -394,6 +399,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 else:
                     original_mono = original_audio
                 original_rms = float(np.sqrt(np.mean(original_mono ** 2)))
+                del original_audio  # free stereo array immediately
 
                 for stem_name, stem_path in sep_result.stems.items():
                     try:
@@ -443,6 +449,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     job["result"] = {}
                 job["result"]["stem_analysis"] = stem_analysis  # type: ignore[index]
                 _log(job, f"✓ Analyzed {len(stem_analysis)} stems", "success")
+                del original_mono  # free mono array
+                gc.collect()
             except ImportError:
                 job["stages"]["ear"]["message"] = (
                     "Separation models not installed — using analysis only"
@@ -460,6 +468,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
 
                 dna = profile_track(audio_file)
                 analysis = dna.to_dict()
+                del dna  # free TrackDNA object (contains numpy arrays)
+                gc.collect()
                 analysis_path = project_dir / "analysis.json"
                 analysis_path.write_text(json.dumps(analysis, indent=2, default=str))
                 _log(job, f"✓ Profile complete — {analysis.get('tempo', '?')} BPM, {analysis.get('key', '?')} {analysis.get('scale', '')}", "success")
@@ -483,13 +493,19 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     analysis["midi_stems"] = {
                         k: v.to_dict() for k, v in midi_results.items()
                     }
-                    _log(job, f"✓ MIDI extracted from {len(midi_results)} stems", "success")
+                    del midi_results
+                    _log(job, f"✓ MIDI extracted from {len(analysis['midi_stems'])} stems", "success")
                 except ImportError:
                     analysis["midi_stems"] = {"error": "basic-pitch not installed"}
                     _log(job, "basic-pitch not installed — skipping MIDI", "warn")
                 except Exception as e:
                     analysis["midi_stems"] = {"error": str(e)}
                     _log(job, f"MIDI extraction error: {e}", "error")
+
+            # Free separation result reference
+            sep_result = None
+            gc.collect()
+            _save_jobs()  # checkpoint after full EAR stage
         else:
             analysis_file = project_dir / "analysis.json"
             if analysis_file.exists():
@@ -502,6 +518,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         job["stages"]["ear"]["status"] = "completed"
         job["progress"] = 20
         _log(job, "✓ EAR stage complete", "success")
+        gc.collect()  # aggressive cleanup before next stage
 
         # Stage 2: PLAN — Auto-detect structure
         job["stage"] = "plan"
@@ -583,6 +600,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
             notes = info.get('notes', '?')
             _log(job, f"  {name}: {notes} notes")
         _log(job, f"✓ GRID complete — {len(midi_patterns)} tracks mapped", "success")
+        gc.collect()
+        _save_jobs()  # checkpoint after GRID
 
         # Stage 4: HANDS — Synthesis / Stem passthrough (REAL)
         job["stage"] = "hands"
@@ -665,6 +684,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         job["stages"]["hands"]["message"] = f"Rendered {len(rendered_stems)} stems"
         job["progress"] = 70
         _log(job, f"✓ HANDS complete — {len(rendered_stems)} stems rendered", "success")
+        gc.collect()
+        _save_jobs()  # checkpoint after HANDS
 
         # Stage 5: CONSOLE — Mix + Master (REAL)
         job["stage"] = "console"
@@ -758,6 +779,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         )
         job["progress"] = 85
         _log(job, "✓ CONSOLE complete", "success")
+        gc.collect()
+        _save_jobs()  # checkpoint after CONSOLE
 
         # Stage 6: QC — 12-dimension comparison (REAL)
         job["stage"] = "qc"
@@ -830,11 +853,16 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
             },
         }
 
+        _save_jobs()  # persist final completed state
+
     except Exception as e:
         job["status"] = "error"
         job["stages"][job["stage"]]["status"] = "error"
         job["stages"][job["stage"]]["message"] = str(e)
         _log(job, f"FATAL: {e}", "error")
+        _save_jobs()  # persist error state
+    finally:
+        gc.collect()  # ensure cleanup regardless of outcome
 
 
 def _find_audio_file(project_dir: Path) -> Path | None:
