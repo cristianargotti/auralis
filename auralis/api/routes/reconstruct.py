@@ -358,6 +358,7 @@ async def get_audio_file(job_id: str, file_key: str):
     file_map = {
         "original": "original.wav",
         "mix": "mix.wav",
+        "master": "master.wav",
         "stem_drums": "stems/drums.wav",
         "stem_bass": "stems/bass.wav",
         "stem_other": "stems/other.wav",

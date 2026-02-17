@@ -18,6 +18,11 @@ const WaveformXRay = dynamic(
     { ssr: false, loading: () => <div className="h-32 bg-zinc-900/50 rounded-xl animate-pulse" /> }
 );
 
+const AudioPlayer = dynamic(
+    () => import("@/components/audio-player"),
+    { ssr: false, loading: () => <div className="h-48 bg-zinc-900/50 rounded-xl animate-pulse" /> }
+);
+
 /* ── Types (track-agnostic) ──────────────────────────── */
 
 interface StageStatus {
@@ -658,6 +663,82 @@ export default function ReconstructPage() {
                         )}
                     </CardContent>
                 </Card>
+            )}
+
+            {/* 🎧 Audio Player + Downloads */}
+            {job && job.status === "completed" && job.result && (
+                <div className="space-y-4">
+                    {/* Audio Player */}
+                    <AudioPlayer
+                        jobId={job.job_id}
+                        hasOriginal={!!job.result.files?.original}
+                        hasMaster={!!job.result.files?.master}
+                        stems={job.result.files?.stems || []}
+                    />
+
+                    {/* Downloads */}
+                    <Card className="bg-zinc-900/50 border-zinc-800">
+                        <CardHeader className="pb-3">
+                            <div className="flex items-center gap-2">
+                                <CardTitle className="text-sm">📥 Downloads</CardTitle>
+                                <CardDescription>All rendered files</CardDescription>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="flex flex-wrap gap-2">
+                                {/* Master — primary */}
+                                {job.result.files?.master && (
+                                    <a
+                                        href={`/api/reconstruct/audio/${job.job_id}/master`}
+                                        download="master.wav"
+                                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-purple-600/20 to-violet-600/20 border border-purple-500/30 text-purple-300 hover:text-purple-200 hover:border-purple-500/50 transition-all text-sm font-medium"
+                                    >
+                                        💎 Master WAV
+                                    </a>
+                                )}
+
+                                {/* Original */}
+                                {job.result.files?.original && (
+                                    <a
+                                        href={`/api/reconstruct/audio/${job.job_id}/original`}
+                                        download="original.wav"
+                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800/50 border border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-all text-xs"
+                                    >
+                                        🎵 Original
+                                    </a>
+                                )}
+
+                                {/* Mix */}
+                                {job.result.files?.mix && (
+                                    <a
+                                        href={`/api/reconstruct/audio/${job.job_id}/mix`}
+                                        download="mix.wav"
+                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800/50 border border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-all text-xs"
+                                    >
+                                        🎚️ Mix
+                                    </a>
+                                )}
+
+                                {/* Stems */}
+                                {[
+                                    { stem: "drums", icon: "🥁", cls: "bg-cyan-600/10 border-cyan-500/30 text-cyan-400" },
+                                    { stem: "bass", icon: "🎸", cls: "bg-rose-600/10 border-rose-500/30 text-rose-400" },
+                                    { stem: "vocals", icon: "🎤", cls: "bg-purple-600/10 border-purple-500/30 text-purple-400" },
+                                    { stem: "other", icon: "🎹", cls: "bg-emerald-600/10 border-emerald-500/30 text-emerald-400" },
+                                ].map(({ stem, icon, cls }) => (
+                                    <a
+                                        key={stem}
+                                        href={`/api/reconstruct/audio/${job.job_id}/stem_${stem}`}
+                                        download={`${stem}.wav`}
+                                        className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:brightness-125 transition-all text-xs ${cls}`}
+                                    >
+                                        {icon} {stem.charAt(0).toUpperCase() + stem.slice(1)}
+                                    </a>
+                                ))}
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>
             )}
 
             {/* Live Logs Terminal */}
