@@ -70,7 +70,6 @@ jobs:
 
             echo "🏗️ Rebuilding containers..."
             docker compose down --remove-orphans
-            docker builder prune -f 2>/dev/null || true
             docker compose up -d --build
 
             echo "🧹 Cleaning up old images..."
