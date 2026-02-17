@@ -600,6 +600,7 @@ def _subprocess_mix(
     ear_analysis: dict[str, Any] | None = None,
     ref_targets: dict[str, dict[str, Any]] | None = None,
     stem_decisions: dict[str, dict[str, Any]] | None = None,
+    brain_stem_plans: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Mix stems with professional per-stem processing driven by EAR analysis.
 
@@ -608,6 +609,7 @@ def _subprocess_mix(
     """
     import soundfile as sf
     import numpy as np
+    from types import SimpleNamespace
     from auralis.hands.mixer import Mixer, MixConfig
     from auralis.hands.effects import (
         EffectChain, ReverbConfig, DelayConfig,
@@ -615,18 +617,49 @@ def _subprocess_mix(
     from auralis.console.stem_recipes import build_recipe_for_stem, StemRecipe, enhance_recipe_with_smart_fx
 
     print(f"Subprocess: Professional mixing {len(stem_paths)} stems @ {bpm} BPM...")
+    if brain_stem_plans:
+        print(f"  🧠 Brain plans for: {list(brain_stem_plans.keys())}")
 
     mixer = Mixer(MixConfig(sample_rate=44100, bpm=bpm))
 
-    # ── Add send buses ──
-    # Reverb bus: medium hall with LP damping
+    # ── Derive bus config from brain or use safe defaults ──
+    # Extract master plan from brain_stem_plans (it may include a "_master" key)
+    bp_master = (brain_stem_plans or {}).get("_master", {})
+
+    # Reverb: brain width influences room_size, louder targets mean tighter reverb
+    brain_room = 0.7   # default
+    brain_rev_vol = -3.0
+    brain_fb = 0.3      # delay feedback default
+    brain_del_vol = -6.0
+
+    if bp_master:
+        # Wider master → bigger room, narrower → tighter
+        width = bp_master.get("width", 1.3)
+        brain_room = round(min(0.95, max(0.3, 0.4 + (width - 1.0) * 0.6)), 2)
+        # Louder targets → less reverb bus volume (tighter)
+        target_lufs = bp_master.get("target_lufs", -14.0)
+        if target_lufs > -10:
+            brain_rev_vol = -6.0
+            brain_del_vol = -9.0
+        elif target_lufs > -14:
+            brain_rev_vol = -3.0
+            brain_del_vol = -6.0
+        else:
+            brain_rev_vol = -1.5
+            brain_del_vol = -4.0
+        # Drive influences delay feedback: more drive = less feedback (cleaner tails)
+        drive = bp_master.get("drive", 1.5)
+        brain_fb = round(min(0.5, max(0.15, 0.5 - (drive - 1.0) * 0.3)), 2)
+        print(f"  🧠 Bus config from brain: room={brain_room}, rev_vol={brain_rev_vol}, fb={brain_fb}, del_vol={brain_del_vol}")
+
+    # Reverb bus
     mixer.add_bus(
         "reverb",
         effects=EffectChain(
             name="reverb_bus",
-            reverb=ReverbConfig(room_size=0.7, damping=0.5, wet=1.0, pre_delay_ms=15.0),
+            reverb=ReverbConfig(room_size=brain_room, damping=0.5, wet=1.0, pre_delay_ms=15.0),
         ),
-        volume_db=-3.0,
+        volume_db=brain_rev_vol,
     )
     # Delay bus: BPM-synced 1/8 note
     delay_time = (60000.0 / bpm) / 2  # 1/8 note in ms
@@ -634,11 +667,11 @@ def _subprocess_mix(
         "delay",
         effects=EffectChain(
             name="delay_bus",
-            delay=DelayConfig(time_ms=delay_time, feedback=0.3, wet=1.0, ping_pong=False),
+            delay=DelayConfig(time_ms=delay_time, feedback=brain_fb, wet=1.0, ping_pong=False),
         ),
-        volume_db=-6.0,
+        volume_db=brain_del_vol,
     )
-    print(f"  Buses: Reverb (hall 0.7, damp 0.5) | Delay ({delay_time:.0f}ms, fb 0.3)")
+    print(f"  Buses: Reverb (room {brain_room}, damp 0.5) | Delay ({delay_time:.0f}ms, fb {brain_fb})")
 
     # ── Build recipes and add tracks ──
     recipes_used: list[str] = []
@@ -650,13 +683,19 @@ def _subprocess_mix(
         # Get per-stem analysis (or empty dict for fallback)
         sa = (stem_analysis or {}).get(name, {})
 
-        # Build intelligent recipe (ref-targeted if bank has entries)
+        # Reconstruct brain plan as namespace for attribute access
+        stem_plan = None
+        if brain_stem_plans and name in brain_stem_plans:
+            stem_plan = SimpleNamespace(**brain_stem_plans[name])
+
+        # Build intelligent recipe (ref-targeted + brain-guided)
         recipe: StemRecipe = build_recipe_for_stem(
             stem_name=name,
             stem_analysis=sa,
             bpm=bpm,
             ear_data=ear_analysis,
             ref_targets=ref_targets,
+            stem_plan=stem_plan,
         )
 
         # Add track to mixer with recipe settings
@@ -693,12 +732,18 @@ def _subprocess_mix(
     }
 
 
-def _subprocess_master(input_path: str, output_path: str, target_lufs: float, bpm: float) -> None:
+def _subprocess_master(input_path: str, output_path: str, target_lufs: float, bpm: float, brain_plan_dict: dict | None = None) -> None:
     """Master audio in a separate process to prevent segfaults."""
     from auralis.console.mastering import master_audio, MasterConfig
 
+    # Reconstruct brain plan as namespace for attribute access
+    brain_plan = None
+    if brain_plan_dict:
+        from types import SimpleNamespace
+        brain_plan = SimpleNamespace(**brain_plan_dict)
+
     print(f"Subprocess: Mastering to {target_lufs} LUFS...")
-    config = MasterConfig(target_lufs=target_lufs, bpm=bpm)
+    config = MasterConfig(target_lufs=target_lufs, bpm=bpm, brain_plan=brain_plan)
     master_audio(input_path=input_path, output_path=output_path, config=config)
 
 
@@ -989,6 +1034,11 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         gc.collect()
         _save_jobs()  # checkpoint after GRID
 
+        # Pre-initialize variables used across stages 4 and 5
+        brain_report = None
+        ref_targets: dict[str, Any] = {}
+        bank = None
+
         # Stage 4: HANDS — Synthesis / Stem passthrough (REAL)
         job["stage"] = "hands"
         job["stages"]["hands"]["status"] = "running"
@@ -1031,8 +1081,32 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         data, sr = sf.read(str(stem_file), dtype="float64")
                         mono = np.mean(data, axis=1) if data.ndim > 1 else data
 
-                        # Apply subtle processing to match original characteristics
-                        chain = EffectChain(name=f"{stem_name}_chain")
+                        # Build real processing chain from recipe (brain-guided if available)
+                        try:
+                            from auralis.console.stem_recipes import build_recipe_for_stem
+                            from types import SimpleNamespace
+
+                            sa = stem_analysis_data.get(stem_name, {}) if stem_analysis_data else {}
+
+                            # Reconstruct brain plan if available
+                            stem_plan = None
+                            if brain_report and brain_report.stem_plans.get(stem_name):
+                                sp = brain_report.stem_plans[stem_name]
+                                stem_plan = SimpleNamespace(**sp.to_dict())
+
+                            recipe = build_recipe_for_stem(
+                                stem_name=stem_name,
+                                stem_analysis=sa,
+                                bpm=plan.get("bpm", 120.0),
+                                ear_data=analysis,
+                                ref_targets=ref_targets if ref_targets else None,
+                                stem_plan=stem_plan,
+                            )
+                            chain = recipe.chain
+                            _log(job, f"  {recipe.description}")
+                        except Exception:
+                            chain = EffectChain(name=f"{stem_name}_chain")
+
                         processed = process_chain(
                             mono, chain, sr=sr, bpm=plan.get("bpm", 120.0)
                         )
@@ -1120,6 +1194,33 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     for k, v in stem_avgs.items()
                 }
 
+                # ── DNA BRAIN: THINK ───────────────────
+                brain_report = None
+                try:
+                    from auralis.console.dna_brain import DNABrain
+                    deep_profile = bank.get_deep_profile()
+                    if deep_profile:
+                        brain = DNABrain()
+                        brain_report = brain.think(
+                            deep_profile=deep_profile,
+                            stem_analysis=stem_analysis_data,
+                            gap_report=gap_report.to_dict(),
+                            ear_data=ear_analysis_data,
+                        )
+                        # Store brain report in results
+                        job["result"]["brain_report"] = brain_report.to_dict()
+
+                        # Log full reasoning chain
+                        _log(job, "")
+                        _log(job, "── DNA BRAIN REASONING ──", "stage")
+                        for line in brain_report.reasoning_chain:
+                            _log(job, line)
+                        _log(job, "")
+                    else:
+                        _log(job, "📊 No deep DNA profiles — brain skipped")
+                except Exception as brain_err:
+                    _log(job, f"DNA Brain skipped: {brain_err}", "warning")
+
                 # ── STEM DECISIONS ──────────────────────
                 try:
                     from auralis.console.stem_decisions import (
@@ -1129,7 +1230,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         generate_stem, find_reference_stem_path,
                     )
 
-                    decision_report = make_decisions(gap_report, ear_analysis_data, bank)
+                    decision_report = make_decisions(gap_report, ear_analysis_data, bank, brain_report=brain_report)
                     job["result"]["stem_decisions"] = decision_report.to_dict()
 
                     # Log decisions
@@ -1164,6 +1265,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                                 duration_s=track_duration,
                                 output_dir=gen_dir,
                                 reference_stem_path=ref_stem_path,
+                                stem_plan=brain_report.stem_plans.get(stem_name) if brain_report else None,
                             )
 
                             if gen_path:
@@ -1209,6 +1311,19 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     if muted:
                         stem_paths_str = {k: v for k, v in stem_paths_str.items() if k not in muted}
 
+                    # Serialize brain stem plans for subprocess
+                    brain_stem_plans_dict = None
+                    if brain_report and brain_report.stem_plans:
+                        brain_stem_plans_dict = {}
+                        for sname, splan in brain_report.stem_plans.items():
+                            brain_stem_plans_dict[sname] = splan.to_dict()
+                        # Include master plan so mix buses can derive config
+                        if brain_report.master_plan:
+                            try:
+                                brain_stem_plans_dict["_master"] = brain_report.master_plan.to_dict()
+                            except Exception:
+                                pass
+
                     mix_result = await asyncio.to_thread(
                         _run_in_subprocess,
                         _subprocess_mix,
@@ -1219,6 +1334,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         ear_analysis=ear_analysis_data,
                         ref_targets=ref_targets if ref_targets else None,
                         stem_decisions=(job.get("result", {}).get("stem_decisions", {}) or {}).get("decisions"),
+                        brain_stem_plans=brain_stem_plans_dict,
                     )
 
                     # Log each recipe decision
@@ -1265,6 +1381,19 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     _log(job, "  Chain: M/S EQ → Soft Clip → Multiband Sat → Harmonic Exciter")
                     _log(job, "  Chain: Multiband Comp → Stereo Width → Limiter → Dither")
                     try:
+                        # Prepare brain master plan for subprocess
+                        brain_plan_dict = None
+                        if brain_report and brain_report.master_plan:
+                            try:
+                                mp = brain_report.master_plan
+                                brain_plan_dict = {
+                                    k: getattr(mp, k, None)
+                                    for k in dir(mp)
+                                    if not k.startswith('_') and not callable(getattr(mp, k, None))
+                                }
+                            except Exception:
+                                pass
+
                         await asyncio.to_thread(
                             _run_in_subprocess,
                             _subprocess_master,
@@ -1272,10 +1401,69 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                             output_path=str(master_path),
                             target_lufs=target_lufs,
                             bpm=plan.get("bpm", 120.0),
+                            brain_plan_dict=brain_plan_dict,
                         )
                         
                         master_info = {"lufs": target_lufs, "method": "full_chain"}
                         _log(job, f"✓ Mastered to {target_lufs} LUFS (10-stage chain)", "success")
+
+                        # ── AUTO-CORRECTION: compare vs DNA ──
+                        if brain_report and master_path.exists():
+                            try:
+                                from auralis.console.auto_correct import evaluate_and_correct
+                                deep_profile = bank.get_deep_profile() if bank else {}
+
+                                if deep_profile:
+                                    correction = await asyncio.to_thread(
+                                        evaluate_and_correct,
+                                        master_path=str(master_path),
+                                        deep_profile=deep_profile,
+                                        pass_number=1,
+                                        max_passes=2,
+                                        threshold=0.15,
+                                    )
+
+                                    job["result"]["auto_correction"] = correction.to_dict()
+                                    _log(job, f"🔄 Auto-correction: gap={correction.total_gap:.0%}, pass={correction.pass_number}")
+
+                                    if correction.master_correction:
+                                        for reason in correction.master_correction.reasoning:
+                                            _log(job, f"  {reason}")
+
+                                    if correction.should_reprocess:
+                                        _log(job, "🔄 Gap detected — applying corrections for pass 2...")
+
+                                        # Merge corrections into brain plan
+                                        corrected_plan = dict(brain_plan_dict or {})
+                                        mc = correction.master_correction
+                                        if mc and mc.corrections:
+                                            # Apply LUFS correction
+                                            if "target_lufs_adjust" in mc.corrections:
+                                                corrected_plan["target_lufs"] = mc.corrections["target_lufs_adjust"]
+                                                _log(job, f"  → LUFS adjusted to {mc.corrections['target_lufs_adjust']:.1f}")
+
+                                            # Apply EQ corrections (append to existing mid bands)
+                                            if "eq_adjust" in mc.corrections:
+                                                existing = list(corrected_plan.get("mid_eq_bands", []))
+                                                existing.extend(mc.corrections["eq_adjust"])
+                                                corrected_plan["mid_eq_bands"] = existing
+                                                for f, g, q in mc.corrections["eq_adjust"]:
+                                                    _log(job, f"  → EQ fix: {g:+.1f}dB @{f:.0f}Hz")
+
+                                        await asyncio.to_thread(
+                                            _run_in_subprocess,
+                                            _subprocess_master,
+                                            input_path=str(mix_path),
+                                            output_path=str(master_path),
+                                            target_lufs=corrected_plan.get("target_lufs", target_lufs),
+                                            bpm=plan.get("bpm", 120.0),
+                                            brain_plan_dict=corrected_plan,
+                                        )
+                                        _log(job, "✓ Re-mastered with corrections (pass 2)", "success")
+                                    else:
+                                        _log(job, "✓ Master passed quality check", "success")
+                            except Exception as ac_err:
+                                _log(job, f"Auto-correction skipped: {ac_err}", "warning")
                     except Exception as e:
                         _log(job, f"Mastering failed ({e}) — bypassing", "warning")
                         # Fallback: copy mix to master

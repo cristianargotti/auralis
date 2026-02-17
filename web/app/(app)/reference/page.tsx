@@ -16,12 +16,14 @@ import {
     removeReference,
     getGapAnalysis,
     getReferenceAverages,
+    getDeepProfile,
     uploadTrack,
     startAnalysis,
     getJobStatus,
     api,
     type ReferenceEntry,
     type GapReport,
+    type DeepProfile,
 } from "@/lib/api";
 
 /* ── Types ──────────────────────────────────────────── */
@@ -54,6 +56,7 @@ export default function ReferenceBankPage() {
     const [gapJobId, setGapJobId] = useState<string>("");
     const [gapLoading, setGapLoading] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
+    const [deepProfile, setDeepProfile] = useState<DeepProfile | null>(null);
 
     // Upload state
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -72,8 +75,14 @@ export default function ReferenceBankPage() {
             setJobs(jobsData.jobs?.filter((j) => j.status === "complete") || []);
 
             if (refsData.count > 0) {
-                const avgs = await getReferenceAverages();
+                const [avgs, deep] = await Promise.all([
+                    getReferenceAverages(),
+                    getDeepProfile().catch(() => null),
+                ]);
                 setAverages(avgs);
+                if (deep && !('count' in deep && deep.count === 0)) {
+                    setDeepProfile(deep as DeepProfile);
+                }
             }
         } catch {
             /* ignore initial load errors */
@@ -234,8 +243,8 @@ export default function ReferenceBankPage() {
                             onDrop={handleDrop}
                             onClick={() => fileInputRef.current?.click()}
                             className={`relative p-10 text-center cursor-pointer transition-all duration-300 group ${dragOver
-                                    ? "bg-cyan-500/10 border-b-2 border-cyan-500"
-                                    : "hover:bg-zinc-800/30"
+                                ? "bg-cyan-500/10 border-b-2 border-cyan-500"
+                                : "hover:bg-zinc-800/30"
                                 }`}
                         >
                             {/* Glow effect */}
@@ -289,10 +298,10 @@ export default function ReferenceBankPage() {
                                             <div className={`flex flex-col items-center transition-all duration-500 ${isActive ? "scale-110" : ""
                                                 }`}>
                                                 <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xl transition-all duration-500 ${isComplete
-                                                        ? "bg-emerald-500/20 border-2 border-emerald-500/50 shadow-lg shadow-emerald-500/10"
-                                                        : isActive
-                                                            ? "bg-cyan-500/20 border-2 border-cyan-500/50 shadow-lg shadow-cyan-500/20 animate-pulse"
-                                                            : "bg-zinc-800/50 border-2 border-zinc-700/30"
+                                                    ? "bg-emerald-500/20 border-2 border-emerald-500/50 shadow-lg shadow-emerald-500/10"
+                                                    : isActive
+                                                        ? "bg-cyan-500/20 border-2 border-cyan-500/50 shadow-lg shadow-cyan-500/20 animate-pulse"
+                                                        : "bg-zinc-800/50 border-2 border-zinc-700/30"
                                                     }`}>
                                                     {isComplete ? "✅" : isActive ? (
                                                         <span className="animate-bounce">{step.icon}</span>
@@ -301,10 +310,10 @@ export default function ReferenceBankPage() {
                                                     )}
                                                 </div>
                                                 <span className={`text-[10px] mt-2 font-medium transition-colors ${isComplete
-                                                        ? "text-emerald-400"
-                                                        : isActive
-                                                            ? "text-cyan-400"
-                                                            : "text-zinc-600"
+                                                    ? "text-emerald-400"
+                                                    : isActive
+                                                        ? "text-cyan-400"
+                                                        : "text-zinc-600"
                                                     }`}>
                                                     {step.label}
                                                 </span>
@@ -313,8 +322,8 @@ export default function ReferenceBankPage() {
                                             {/* Connector line */}
                                             {idx < UPLOAD_STEPS.length - 1 && (
                                                 <div className={`w-12 h-0.5 mx-1 mt-[-18px] rounded-full transition-all duration-700 ${isComplete
-                                                        ? "bg-emerald-500/40"
-                                                        : "bg-zinc-800"
+                                                    ? "bg-emerald-500/40"
+                                                    : "bg-zinc-800"
                                                     }`} />
                                             )}
                                         </div>
@@ -570,6 +579,143 @@ export default function ReferenceBankPage() {
                 </CardContent>
             </Card>
 
+            {/* ══════ DEEP DNA INTELLIGENCE ══════ */}
+            {references.length > 0 && deepProfile && (
+                <Card className="bg-zinc-900/30 border-zinc-800/50 overflow-hidden">
+                    <div className="px-5 pt-4 pb-2">
+                        <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg"
+                                style={{ background: "linear-gradient(135deg, oklch(0.75 0.15 195 / 20%), oklch(0.7 0.15 280 / 20%))" }}>
+                                🧠
+                            </div>
+                            <div>
+                                <h3 className="text-base font-semibold text-zinc-200">
+                                    Deep DNA Intelligence
+                                </h3>
+                                <p className="text-[11px] text-zinc-600">
+                                    {deepProfile.deep_count}/{deepProfile.reference_count} refs with deep analysis
+                                    {deepProfile.dominant_key && ` • ${deepProfile.dominant_key}`}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <CardContent className="pb-4 pt-2 space-y-4">
+                        {/* Percussion Palette */}
+                        {Object.keys(deepProfile.percussion.palette).length > 0 && (
+                            <div className="rounded-xl bg-zinc-800/20 border border-zinc-800/30 p-4">
+                                <div className="text-xs font-medium text-zinc-400 mb-3 flex items-center gap-2">
+                                    🥁 Percussion Palette
+                                    <span className="text-zinc-600 font-normal">
+                                        ({deepProfile.percussion.total_hits_across_refs.toLocaleString()} hits analyzed)
+                                    </span>
+                                </div>
+                                <div className="space-y-1.5">
+                                    {Object.entries(deepProfile.percussion.palette)
+                                        .slice(0, 8)
+                                        .map(([label, count]) => {
+                                            const max = Math.max(...Object.values(deepProfile.percussion.palette));
+                                            const pct = max > 0 ? (count / max) * 100 : 0;
+                                            const isDominant = deepProfile.percussion.dominant.includes(label);
+                                            return (
+                                                <div key={label} className="flex items-center gap-2">
+                                                    <span className={`text-[10px] w-16 text-right font-mono ${isDominant ? "text-cyan-400 font-bold" : "text-zinc-500"}`}>
+                                                        {label}
+                                                    </span>
+                                                    <div className="flex-1 h-2 bg-zinc-800/50 rounded-full overflow-hidden">
+                                                        <div
+                                                            className="h-full rounded-full transition-all duration-700"
+                                                            style={{
+                                                                width: `${pct}%`,
+                                                                background: isDominant
+                                                                    ? "linear-gradient(90deg, oklch(0.75 0.15 195), oklch(0.65 0.15 280))"
+                                                                    : "oklch(0.5 0.05 250)",
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <span className="text-[9px] text-zinc-600 w-10 text-right font-mono">
+                                                        {count}
+                                                    </span>
+                                                </div>
+                                            );
+                                        })}
+                                </div>
+                                {deepProfile.percussion.avg_density > 0 && (
+                                    <div className="mt-2 text-[10px] text-zinc-600">
+                                        Avg density: <span className="text-zinc-400 font-mono">{deepProfile.percussion.avg_density}</span> hits/sec
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Instruments + FX + Bass + Vocals */}
+                        <div className="grid grid-cols-2 gap-3">
+                            {/* Bass Profile */}
+                            {deepProfile.bass.dominant_type && (
+                                <div className="rounded-xl bg-zinc-800/20 border border-zinc-800/30 p-3">
+                                    <div className="text-[10px] text-zinc-500 mb-2">🎸 Bass Type</div>
+                                    <div className="text-sm font-semibold" style={{ color: "oklch(0.75 0.15 195)" }}>
+                                        {deepProfile.bass.dominant_type}
+                                    </div>
+                                    {Object.keys(deepProfile.bass.types_found).length > 1 && (
+                                        <div className="text-[9px] text-zinc-600 mt-1">
+                                            Also: {Object.keys(deepProfile.bass.types_found)
+                                                .filter(t => t !== deepProfile.bass.dominant_type)
+                                                .join(", ")}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Arrangement */}
+                            <div className="rounded-xl bg-zinc-800/20 border border-zinc-800/30 p-3">
+                                <div className="text-[10px] text-zinc-500 mb-2">🔗 Arrangement</div>
+                                <div className="text-sm font-semibold text-zinc-300">
+                                    ~{deepProfile.arrangement.avg_sections} sections
+                                </div>
+                                <div className="text-[9px] text-zinc-600 mt-1">
+                                    Sidechain: {deepProfile.arrangement.sidechain_ratio > 0.5
+                                        ? "Common" : deepProfile.arrangement.sidechain_ratio > 0
+                                            ? "Sometimes" : "Rare"}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Instruments & FX Badges */}
+                        {(deepProfile.instruments.palette.length > 0 || deepProfile.fx.palette.length > 0) && (
+                            <div className="rounded-xl bg-zinc-800/20 border border-zinc-800/30 p-3">
+                                <div className="text-[10px] text-zinc-500 mb-2">🎹 Instruments & FX</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {deepProfile.instruments.palette.map(inst => (
+                                        <Badge key={inst} variant="outline" className="text-[9px] border-cyan-500/20 text-cyan-400/80 bg-cyan-500/5 px-2">
+                                            {inst}
+                                        </Badge>
+                                    ))}
+                                    {deepProfile.fx.palette.map(fx => (
+                                        <Badge key={fx} variant="outline" className="text-[9px] border-violet-500/20 text-violet-400/80 bg-violet-500/5 px-2">
+                                            ✨ {fx}
+                                        </Badge>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Vocal Effects */}
+                        {deepProfile.vocals.effects.length > 0 && (
+                            <div className="rounded-xl bg-zinc-800/20 border border-zinc-800/30 p-3">
+                                <div className="text-[10px] text-zinc-500 mb-2">🎤 Vocal FX</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {deepProfile.vocals.effects.map(vfx => (
+                                        <Badge key={vfx} variant="outline" className="text-[9px] border-amber-500/20 text-amber-400/80 bg-amber-500/5 px-2">
+                                            {vfx}
+                                        </Badge>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
             {/* ══════ GAP ANALYSIS ══════ */}
             <Card className="bg-zinc-900/30 border-zinc-800/50">
                 <CardHeader className="pb-3">
@@ -622,10 +768,10 @@ export default function ReferenceBankPage() {
                             {/* Score */}
                             <div className="text-center py-4">
                                 <div className={`text-6xl font-bold font-mono ${gapReport.overall_score >= 80
-                                        ? "bg-gradient-to-b from-emerald-300 to-emerald-500"
-                                        : gapReport.overall_score >= 60
-                                            ? "bg-gradient-to-b from-cyan-300 to-cyan-500"
-                                            : "bg-gradient-to-b from-red-300 to-red-500"
+                                    ? "bg-gradient-to-b from-emerald-300 to-emerald-500"
+                                    : gapReport.overall_score >= 60
+                                        ? "bg-gradient-to-b from-cyan-300 to-cyan-500"
+                                        : "bg-gradient-to-b from-red-300 to-red-500"
                                     } bg-clip-text text-transparent`}>
                                     {gapReport.overall_score.toFixed(0)}
                                 </div>
@@ -664,8 +810,8 @@ export default function ReferenceBankPage() {
                                     <Badge
                                         variant="outline"
                                         className={`text-[10px] font-mono ${Math.abs(gapReport.lufs_gap) < 2
-                                                ? "border-emerald-500/20 text-emerald-400 bg-emerald-500/5"
-                                                : "border-red-500/20 text-red-400 bg-red-500/5"
+                                            ? "border-emerald-500/20 text-emerald-400 bg-emerald-500/5"
+                                            : "border-red-500/20 text-red-400 bg-red-500/5"
                                             }`}
                                     >
                                         {gapReport.lufs_gap > 0 ? "+" : ""}
@@ -688,10 +834,10 @@ export default function ReferenceBankPage() {
                                             <Badge
                                                 variant="outline"
                                                 className={`text-[10px] font-mono ${gap.quality_score >= 80
-                                                        ? "border-emerald-500/20 text-emerald-400 bg-emerald-500/5"
-                                                        : gap.quality_score >= 60
-                                                            ? "border-cyan-500/20 text-cyan-400 bg-cyan-500/5"
-                                                            : "border-red-500/20 text-red-400 bg-red-500/5"
+                                                    ? "border-emerald-500/20 text-emerald-400 bg-emerald-500/5"
+                                                    : gap.quality_score >= 60
+                                                        ? "border-cyan-500/20 text-cyan-400 bg-cyan-500/5"
+                                                        : "border-red-500/20 text-red-400 bg-red-500/5"
                                                     }`}
                                             >
                                                 {gap.quality_score.toFixed(0)}/100

@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import traceback
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
 
+import structlog
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from auralis.config import settings
+
+logger = structlog.get_logger()
 
 router = APIRouter(prefix="/ear", tags=["ear"])
 
@@ -54,22 +59,49 @@ async def upload_track(
             detail=f"Unsupported format: {suffix}. Use: {', '.join(valid_extensions)}",
         )
 
-    # Create project directory
-    project_id = str(uuid.uuid4())[:8]
-    project_dir = settings.projects_dir / project_id
-    project_dir.mkdir(parents=True, exist_ok=True)
+    # Check disk space before upload
+    try:
+        disk = shutil.disk_usage(settings.projects_dir)
+        free_gb = disk.free / (1024 ** 3)
+        if free_gb < 0.5:  # Less than 500MB free
+            logger.error("ear.upload.disk_full", free_gb=round(free_gb, 2))
+            raise HTTPException(
+                status_code=507,
+                detail=f"Insufficient disk space: {free_gb:.1f}GB free. Need at least 500MB.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Don't fail on disk check errors
 
-    # Save uploaded file
-    upload_path = project_dir / f"original{suffix}"
-    content = await file.read()
-    upload_path.write_bytes(content)
+    try:
+        # Create project directory
+        project_id = str(uuid.uuid4())[:8]
+        project_dir = settings.projects_dir / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
 
-    return {
-        "project_id": project_id,
-        "file": str(upload_path),
-        "size_mb": str(round(len(content) / 1024 / 1024, 2)),
-        "message": f"Track uploaded. Use /ear/analyze/{project_id} to start analysis.",
-    }
+        # Save uploaded file
+        upload_path = project_dir / f"original{suffix}"
+        content = await file.read()
+        upload_path.write_bytes(content)
+
+        size_mb = round(len(content) / 1024 / 1024, 2)
+        logger.info("ear.upload.success", project_id=project_id, size_mb=size_mb, filename=file.filename)
+
+        return {
+            "project_id": project_id,
+            "file": str(upload_path),
+            "size_mb": str(size_mb),
+            "message": f"Track uploaded. Use /ear/analyze/{project_id} to start analysis.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("ear.upload.failed", error=str(e), traceback=traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Upload failed: {e!s}",
+        )
 
 
 @router.post("/analyze/{project_id}")
@@ -148,6 +180,7 @@ async def _run_analysis(
         # Step 1: Spectral analysis
         _jobs[job_id]["progress"] = 1
         _jobs[job_id]["message"] = "Running spectral analysis..."
+        logger.info("ear.analysis.step", job_id=job_id, step=1, stage="spectral")
 
         from auralis.ear.spectral import analyze_audio
 
@@ -156,6 +189,7 @@ async def _run_analysis(
         # Step 2: Track profiling (DNA map)
         _jobs[job_id]["progress"] = 2
         _jobs[job_id]["message"] = "Building track DNA map..."
+        logger.info("ear.analysis.step", job_id=job_id, step=2, stage="profiling")
 
         from auralis.ear.profiler import profile_track
 
@@ -165,6 +199,7 @@ async def _run_analysis(
         # Step 3: Stem separation (if available)
         _jobs[job_id]["progress"] = 3
         _jobs[job_id]["message"] = "Separating stems..."
+        logger.info("ear.analysis.step", job_id=job_id, step=3, stage="separation")
 
         stems_dir = project_dir / "stems"
         try:
@@ -182,6 +217,7 @@ async def _run_analysis(
         # Step 4: MIDI extraction (if available)
         _jobs[job_id]["progress"] = 4
         _jobs[job_id]["message"] = "Extracting MIDI..."
+        logger.info("ear.analysis.step", job_id=job_id, step=4, stage="midi")
 
         midi_dir = project_dir / "midi"
         try:
@@ -205,7 +241,10 @@ async def _run_analysis(
             "stems": stems_result,
             "midi": midi_result,
         }
+        logger.info("ear.analysis.complete", job_id=job_id)
 
     except Exception as e:
+        tb = traceback.format_exc()
+        logger.error("ear.analysis.failed", job_id=job_id, error=str(e), traceback=tb)
         _jobs[job_id]["status"] = "error"
         _jobs[job_id]["message"] = f"Error: {e!s}"

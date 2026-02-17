@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import soundfile as sf
@@ -48,6 +49,7 @@ class MasterConfig:
     section_bars: list[int] = field(default_factory=list)
     custom_eq: dict | None = None
     skip_stages: list[str] = field(default_factory=list)
+    brain_plan: Any | None = None  # MasterPlan from DNABrain
 
 
 @dataclass
@@ -138,21 +140,33 @@ def _biquad_shelf(fc: float, gain_db: float, shelf_type: str, sr: int) -> np.nda
 # ── Stages ───────────────────────────────────────────────
 
 
-def apply_ms_eq(data: np.ndarray, sr: int, custom_eq: dict | None = None) -> np.ndarray:
-    """① Mid/Side EQ — surgical tonal balance."""
+def apply_ms_eq(data: np.ndarray, sr: int, custom_eq: dict | None = None, brain_plan: Any | None = None) -> np.ndarray:
+    """① Mid/Side EQ — surgical tonal balance. Brain-guided when available."""
     mid, side = _to_ms(data)
     sos = signal.iirfilter(4, 20 / (sr / 2), btype="high", ftype="butter", output="sos")
     mid = signal.sosfilt(sos, mid).astype(np.float64)
     side = signal.sosfilt(sos, side).astype(np.float64)
 
-    mc = custom_eq.get("mid_bands") if custom_eq else None
-    mid_sos = np.vstack([_biquad_peak(f, g, q, sr) for f, g, q in mc]) if mc else np.vstack([
-        _biquad_peak(300, -2.5, 1.5, sr), _biquad_peak(3000, 1.5, 1.2, sr), _biquad_peak(6000, 1.0, 0.8, sr)])
+    # Mid EQ: brain-guided or custom or default
+    if brain_plan and getattr(brain_plan, 'mid_eq_bands', []):
+        mid_sos = np.vstack([_biquad_peak(f, g, q, sr) for f, g, q in brain_plan.mid_eq_bands])
+    elif custom_eq and custom_eq.get("mid_bands"):
+        mc = custom_eq["mid_bands"]
+        mid_sos = np.vstack([_biquad_peak(f, g, q, sr) for f, g, q in mc])
+    else:
+        mid_sos = np.vstack([
+            _biquad_peak(300, -2.5, 1.5, sr), _biquad_peak(3000, 1.5, 1.2, sr), _biquad_peak(6000, 1.0, 0.8, sr)])
     mid = signal.sosfilt(mid_sos, mid).astype(np.float64)
 
-    sc = custom_eq.get("side_bands") if custom_eq else None
-    side_sos = np.vstack([_biquad_peak(f, g, q, sr) for f, g, q in sc]) if sc else np.vstack([
-        _biquad_shelf(8000, 2.0, "high", sr), _biquad_peak(5000, 1.5, 1.0, sr), _biquad_peak(250, -3.0, 1.2, sr)])
+    # Side EQ: brain-guided or custom or default
+    if brain_plan and getattr(brain_plan, 'side_eq_bands', []):
+        side_sos = np.vstack([_biquad_peak(f, g, q, sr) for f, g, q in brain_plan.side_eq_bands])
+    elif custom_eq and custom_eq.get("side_bands"):
+        sc = custom_eq["side_bands"]
+        side_sos = np.vstack([_biquad_peak(f, g, q, sr) for f, g, q in sc])
+    else:
+        side_sos = np.vstack([
+            _biquad_shelf(8000, 2.0, "high", sr), _biquad_peak(5000, 1.5, 1.0, sr), _biquad_peak(250, -3.0, 1.2, sr)])
     side = signal.sosfilt(side_sos, side).astype(np.float64)
     return _from_ms(mid, side)
 
@@ -221,9 +235,21 @@ def _compress_band(data: np.ndarray, thresh_db: float, ratio: float,
     return data * g[:, np.newaxis] if data.ndim == 2 else data * g
 
 
-def apply_multiband_compression(data: np.ndarray, sr: int) -> np.ndarray:
-    """⑤ 3-band compressor with linear-phase FIR crossovers."""
+def apply_multiband_compression(data: np.ndarray, sr: int, brain_plan: Any | None = None) -> np.ndarray:
+    """⑤ 3-band compressor with linear-phase FIR crossovers. Brain-guided when available."""
     low, mid, high = _linear_phase_split_3band(data, 500, 4000, sr)
+    if brain_plan and getattr(brain_plan, 'comp_low', {}):
+        cl = brain_plan.comp_low
+        cm = brain_plan.comp_mid
+        ch = brain_plan.comp_high
+        return (
+            _compress_band(low, cl.get('threshold_db', -18), cl.get('ratio', 4.0),
+                          cl.get('attack_ms', 10), cl.get('release_ms', 100), sr) +
+            _compress_band(mid, cm.get('threshold_db', -14), cm.get('ratio', 2.5),
+                          cm.get('attack_ms', 8), cm.get('release_ms', 80), sr) +
+            _compress_band(high, ch.get('threshold_db', -10), ch.get('ratio', 1.5),
+                          ch.get('attack_ms', 2), ch.get('release_ms', 40), sr)
+        )
     return (_compress_band(low, -18, 4.0, 10, 100, sr) +
             _compress_band(mid, -14, 2.5, 8, 80, sr) +
             _compress_band(high, -10, 1.5, 2, 40, sr))
@@ -310,6 +336,22 @@ def master_audio(input_path: str | Path, output_path: str | Path | None = None,
 
     logger.info("mastering_start", input=p.name, target_lufs=config.target_lufs)
 
+    # Apply brain plan overrides to config
+    bp = config.brain_plan
+    if bp:
+        if getattr(bp, 'target_lufs', None) and bp.target_lufs < 0:
+            config.target_lufs = bp.target_lufs
+        if getattr(bp, 'drive', None):
+            config.drive = bp.drive
+        if getattr(bp, 'width', None):
+            config.width = bp.width
+        logger.info(
+            "mastering_brain",
+            lufs=config.target_lufs,
+            drive=config.drive,
+            width=config.width,
+        )
+
     # ⓪ DC offset + section smoothing
     data -= np.mean(data, axis=0)
     bar_s = round(60 / config.bpm * 4 * sr)
@@ -325,7 +367,7 @@ def master_audio(input_path: str | Path, output_path: str | Path | None = None,
         data[pos:end, :] *= fi[:end - pos, np.newaxis]
     stages.append("preprocess")
 
-    data = apply_ms_eq(data, sr, custom_eq=config.custom_eq); stages.append("ms_eq")
+    data = apply_ms_eq(data, sr, custom_eq=config.custom_eq, brain_plan=bp); stages.append("ms_eq")
     if "soft_clip_1" not in skip:
         data = apply_soft_clip(data, -1.5); stages.append("soft_clip_1")
     if "saturation" not in skip:
@@ -333,7 +375,7 @@ def master_audio(input_path: str | Path, output_path: str | Path | None = None,
     if "exciter" not in skip:
         data = apply_harmonic_exciter(data, sr); stages.append("exciter")
     if "compression" not in skip:
-        data = apply_multiband_compression(data, sr); stages.append("compression")
+        data = apply_multiband_compression(data, sr, brain_plan=bp); stages.append("compression")
 
     gain_needed = (config.target_lufs + 0.7) - _rms_db(data)
     if gain_needed > 0:

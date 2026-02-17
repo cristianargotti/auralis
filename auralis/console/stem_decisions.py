@@ -197,6 +197,7 @@ def make_decisions(
     gap_report: GapReport,
     ear_analysis: dict[str, Any],
     bank: ReferenceBank | None = None,
+    brain_report: Any | None = None,
 ) -> DecisionReport:
     """Analyse gap report and produce per-stem decisions.
 
@@ -204,6 +205,7 @@ def make_decisions(
         gap_report: Full gap analysis from gap_analyzer
         ear_analysis: EAR stage output (BPM, key, LUFS, etc.)
         bank: Reference bank (for counting, not for copying stems)
+        brain_report: Optional BrainReport from DNABrain.think()
 
     Returns:
         DecisionReport with one StemDecision per stem.
@@ -211,6 +213,13 @@ def make_decisions(
     bpm = float(ear_analysis.get("bpm", 120.0))
     key = str(ear_analysis.get("key", "C"))
     scale = str(ear_analysis.get("scale", "minor"))
+
+    # Extract brain stem plans if available
+    brain_plans: dict[str, Any] = {}
+    if brain_report is not None:
+        brain_plans = getattr(brain_report, "stem_plans", {})
+        if brain_plans:
+            logger.info("stem_decisions.using_brain", stems=list(brain_plans.keys()))
 
     report = DecisionReport(
         reference_count=gap_report.reference_count,
@@ -225,6 +234,7 @@ def make_decisions(
 
     for stem_name, stem_gap in gap_report.stem_gaps.items():
         score = stem_gap.quality_score
+        brain_plan = brain_plans.get(stem_name)  # StemPlan or None
 
         # Phase 1: Check for harmful elements → MUTE
         should_mute, mute_reason = _should_mute(stem_name, stem_gap)
@@ -239,6 +249,22 @@ def make_decisions(
             logger.info("stem_decision", stem=stem_name, action="mute", reason=mute_reason)
             continue
 
+        # Helper: get patch/style/fx from brain or fallback
+        def _get_patch() -> str:
+            if brain_plan and getattr(brain_plan, "patch", ""):
+                return brain_plan.patch
+            return _select_synth_patch(stem_name, bpm)
+
+        def _get_style() -> str:
+            if brain_plan and getattr(brain_plan, "style", ""):
+                return brain_plan.style
+            return _select_pattern_style(stem_name, bpm)
+
+        def _get_fx() -> list[str]:
+            if brain_plan and getattr(brain_plan, "fx_chain", []):
+                return list(brain_plan.fx_chain)
+            return _select_smart_fx(stem_name, stem_gap)
+
         # Phase 2: Score-based decisions
         if score >= THRESHOLD_KEEP:
             # KEEP — just apply ref-targeted recipe
@@ -251,57 +277,61 @@ def make_decisions(
             logger.info("stem_decision", stem=stem_name, action="keep", score=score)
 
         elif score >= THRESHOLD_CORRECT:
-            # CORRECT — aggressive recipe + smart FX
-            extra_fx = _select_smart_fx(stem_name, stem_gap)
+            # CORRECT — aggressive recipe + smart FX (brain-guided)
+            extra_fx = _get_fx()
+            brain_tag = " [🧠]" if brain_plan else ""
             report.decisions[stem_name] = StemDecision(
                 stem_name=stem_name,
                 action="correct",
                 quality_score=score,
-                reason=f"Quality {score:.0f}/100 — aggressive recipe + {', '.join(extra_fx) if extra_fx else 'standard FX'}",
+                reason=f"Quality {score:.0f}/100 — aggressive recipe + {', '.join(extra_fx) if extra_fx else 'standard FX'}{brain_tag}",
                 extra_fx=extra_fx,
             )
-            logger.info("stem_decision", stem=stem_name, action="correct", score=score, fx=extra_fx)
+            logger.info("stem_decision", stem=stem_name, action="correct", score=score, fx=extra_fx, brain=bool(brain_plan))
 
         elif score >= THRESHOLD_ENHANCE and stem_name in REGENERABLE_STEMS:
-            # ENHANCE — keep original + layer synth support
-            patch = _select_synth_patch(stem_name, bpm)
-            style = _select_pattern_style(stem_name, bpm)
+            # ENHANCE — keep original + layer synth support (brain-guided)
+            patch = _get_patch()
+            style = _get_style()
+            brain_tag = " [🧠]" if brain_plan else ""
             report.decisions[stem_name] = StemDecision(
                 stem_name=stem_name,
                 action="enhance",
                 quality_score=score,
-                reason=f"Quality {score:.0f}/100 — layering {patch} ({style}) for support",
+                reason=f"Quality {score:.0f}/100 — layering {patch} ({style}) for support{brain_tag}",
                 synth_patch=patch,
                 pattern_style=style,
             )
-            logger.info("stem_decision", stem=stem_name, action="enhance", patch=patch, style=style)
+            logger.info("stem_decision", stem=stem_name, action="enhance", patch=patch, style=style, brain=bool(brain_plan))
 
         elif stem_name in REGENERABLE_STEMS:
-            # REPLACE — mute original, generate replacement
-            patch = _select_synth_patch(stem_name, bpm)
-            style = _select_pattern_style(stem_name, bpm)
+            # REPLACE — mute original, generate replacement (brain-guided)
+            patch = _get_patch()
+            style = _get_style()
+            brain_tag = " [🧠]" if brain_plan else ""
             report.decisions[stem_name] = StemDecision(
                 stem_name=stem_name,
                 action="replace",
                 quality_score=score,
-                reason=f"Quality {score:.0f}/100 — replacing with generated {patch} ({style})",
+                reason=f"Quality {score:.0f}/100 — replacing with generated {patch} ({style}){brain_tag}",
                 synth_patch=patch,
                 pattern_style=style,
                 volume_adjust_db=float("-inf"),  # mute original
             )
-            logger.info("stem_decision", stem=stem_name, action="replace", patch=patch, style=style)
+            logger.info("stem_decision", stem=stem_name, action="replace", patch=patch, style=style, brain=bool(brain_plan))
 
         else:
             # Non-regenerable stem (vocals) with low score → heavy CORRECT
-            extra_fx = _select_smart_fx(stem_name, stem_gap)
+            extra_fx = _get_fx()
+            brain_tag = " [🧠]" if brain_plan else ""
             report.decisions[stem_name] = StemDecision(
                 stem_name=stem_name,
                 action="correct",
                 quality_score=score,
-                reason=f"Quality {score:.0f}/100 — cannot regenerate {stem_name}, applying heavy correction",
+                reason=f"Quality {score:.0f}/100 — cannot regenerate {stem_name}, applying heavy correction{brain_tag}",
                 extra_fx=extra_fx,
             )
-            logger.info("stem_decision", stem=stem_name, action="correct_fallback", score=score)
+            logger.info("stem_decision", stem=stem_name, action="correct_fallback", score=score, brain=bool(brain_plan))
 
     return report
 

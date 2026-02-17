@@ -92,6 +92,7 @@ def build_drum_recipe(
     analysis: dict[str, Any],
     bpm: float = 120.0,
     ref_target: dict[str, Any] | None = None,
+    stem_plan: Any | None = None,
 ) -> StemRecipe:
     """Build processing chain for drums stem.
 
@@ -149,8 +150,13 @@ def build_drum_recipe(
         attack_ms=5.0, release_ms=50.0, makeup_db=2.0,
     )
 
-    # ── Saturation ──
-    dist = DistortionConfig(drive=2.0, type="soft_clip", mix=0.15)
+    # ── Saturation — brain-guided or generic ──
+    if stem_plan and getattr(stem_plan, 'saturation_drive', 0):
+        drive = stem_plan.saturation_drive
+        decisions.append(f"🧠 Sat: {drive:.0f}dB drive (brain)")
+    else:
+        drive = 2.0
+    dist = DistortionConfig(drive=drive, type="soft_clip", mix=0.15)
 
     # ── Volume — ref-targeted or generic ──
     rms_gap = _ref_rms_gap(analysis, ref_target)
@@ -165,14 +171,38 @@ def build_drum_recipe(
         elif rms < -25:
             vol = 1.0
 
+    # ── Brain EQ overrides ──
+    if stem_plan and getattr(stem_plan, 'eq_adjustments', []):
+        for freq_hz, gain_db, q in stem_plan.eq_adjustments:
+            eq_bands.append(EQBand(freq_hz=freq_hz, gain_db=gain_db, q=q, type="peak"))
+            decisions.append(f"🧠 EQ: {gain_db:+.1f}dB @{freq_hz:.0f}Hz")
+
+    # ── Brain compression overrides ──
+    if stem_plan and getattr(stem_plan, 'compression', {}):
+        bp = stem_plan.compression
+        if bp.get('threshold_db'):
+            comp = CompressorConfig(
+                threshold_db=bp['threshold_db'], ratio=bp.get('ratio', ratio),
+                attack_ms=bp.get('attack_ms', 5.0), release_ms=bp.get('release_ms', 50.0),
+                makeup_db=2.0,
+            )
+            decisions.append(f"🧠 Comp: {bp.get('ratio', ratio)}:1, atk={bp.get('attack_ms', 5.0)}ms")
+
     chain = EffectChain(
         name="drums_pro", eq_bands=eq_bands,
         compressor=comp, distortion=dist,
     )
 
+    # ── Sends — brain-guided or generic ──
+    if stem_plan and getattr(stem_plan, 'reverb_wet', 0):
+        drum_rev = stem_plan.reverb_wet
+        decisions.append(f"🧠 Reverb send: {drum_rev:.0%}")
+    else:
+        drum_rev = 0.08
+
     return StemRecipe(
         name="drums", chain=chain, volume_db=vol, pan=0.0,
-        sends=[SendConfig(bus_name="reverb", amount=0.08, pre_fader=False)],
+        sends=[SendConfig(bus_name="reverb", amount=drum_rev, pre_fader=False)],
         description=f"🥁 Drums: {' | '.join(decisions)}",
     )
 
@@ -184,6 +214,7 @@ def build_bass_recipe(
     analysis: dict[str, Any],
     bpm: float = 120.0,
     ref_target: dict[str, Any] | None = None,
+    stem_plan: Any | None = None,
 ) -> StemRecipe:
     """Build processing chain for bass stem.
 
@@ -243,8 +274,21 @@ def build_bass_recipe(
         attack_ms=10.0, release_ms=80.0, makeup_db=3.0,
     )
 
-    dist = DistortionConfig(drive=3.0, type="tube", mix=0.2)
-    decisions.append("Sat: tube")
+    # ── Saturation — brain-guided or generic ──
+    if stem_plan and getattr(stem_plan, 'saturation_drive', 0):
+        drive = stem_plan.saturation_drive
+        decisions.append(f"🧠 Sat: tube, drive={drive:.0f}dB")
+    else:
+        drive = 3.0
+    dist = DistortionConfig(drive=drive, type="tube", mix=0.2)
+    if not (stem_plan and getattr(stem_plan, 'saturation_drive', 0)):
+        decisions.append("Sat: tube")
+
+    # ── Sidechain from brain ──
+    sends: list[Any] = []
+    if stem_plan and getattr(stem_plan, 'sidechain', False):
+        # Sidechain will be applied by the effects chain
+        decisions.append(f"🧠 Sidechain: depth={stem_plan.sidechain_depth:.0%}")
 
     # ── Volume — ref-targeted or generic ──
     rms_gap = _ref_rms_gap(analysis, ref_target)
@@ -259,6 +303,23 @@ def build_bass_recipe(
         elif rms < -25:
             vol = 2.0
 
+    # ── Brain EQ overrides ──
+    if stem_plan and getattr(stem_plan, 'eq_adjustments', []):
+        for freq_hz, gain_db, q in stem_plan.eq_adjustments:
+            eq_bands.append(EQBand(freq_hz=freq_hz, gain_db=gain_db, q=q, type="peak"))
+            decisions.append(f"🧠 EQ: {gain_db:+.1f}dB @{freq_hz:.0f}Hz")
+
+    # ── Brain compression overrides ──
+    if stem_plan and getattr(stem_plan, 'compression', {}):
+        bp = stem_plan.compression
+        if bp.get('threshold_db'):
+            comp = CompressorConfig(
+                threshold_db=bp['threshold_db'], ratio=bp.get('ratio', ratio),
+                attack_ms=bp.get('attack_ms', 10.0), release_ms=bp.get('release_ms', 80.0),
+                makeup_db=3.0,
+            )
+            decisions.append(f"🧠 Comp: {bp.get('ratio', ratio)}:1")
+
     chain = EffectChain(
         name="bass_pro", eq_bands=eq_bands,
         compressor=comp, distortion=dist,
@@ -266,7 +327,7 @@ def build_bass_recipe(
 
     return StemRecipe(
         name="bass", chain=chain, volume_db=vol, pan=0.0,
-        sends=[],
+        sends=sends,
         description=f"🎸 Bass: {' | '.join(decisions)}",
     )
 
@@ -278,6 +339,7 @@ def build_vocals_recipe(
     analysis: dict[str, Any],
     bpm: float = 120.0,
     ref_target: dict[str, Any] | None = None,
+    stem_plan: Any | None = None,
 ) -> StemRecipe:
     """Build processing chain for vocals stem.
 
@@ -354,13 +416,26 @@ def build_vocals_recipe(
         elif energy < 10:
             vol = 3.0
 
-    # ── Sends ──
+    # ── Sends — brain-guided or generic ──
     delay_ms = (60000.0 / bpm) / 2
+    if stem_plan:
+        rev_wet = getattr(stem_plan, 'reverb_wet', 0.20)
+        del_wet = getattr(stem_plan, 'delay_wet', 0.12)
+    else:
+        rev_wet = 0.20
+        del_wet = 0.12
     sends = [
-        SendConfig(bus_name="reverb", amount=0.20, pre_fader=False),
-        SendConfig(bus_name="delay", amount=0.12, pre_fader=False),
+        SendConfig(bus_name="reverb", amount=rev_wet, pre_fader=False),
+        SendConfig(bus_name="delay", amount=del_wet, pre_fader=False),
     ]
-    decisions.append(f"Reverb 20% | Delay 12% ({delay_ms:.0f}ms)")
+    brain_tag = " 🧠" if stem_plan else ""
+    decisions.append(f"Reverb {rev_wet:.0%} | Delay {del_wet:.0%} ({delay_ms:.0f}ms){brain_tag}")
+
+    # ── Brain EQ overrides ──
+    if stem_plan and getattr(stem_plan, 'eq_adjustments', []):
+        for freq_hz, gain_db, q in stem_plan.eq_adjustments:
+            eq_bands.append(EQBand(freq_hz=freq_hz, gain_db=gain_db, q=q, type="peak"))
+            decisions.append(f"🧠 EQ: {gain_db:+.1f}dB @{freq_hz:.0f}Hz")
 
     chain = EffectChain(
         name="vocals_pro", eq_bands=eq_bands, compressor=comp,
@@ -381,6 +456,7 @@ def build_other_recipe(
     bpm: float = 120.0,
     ref_target: dict[str, Any] | None = None,
     ear_data: dict[str, Any] | None = None,
+    stem_plan: Any | None = None,
 ) -> StemRecipe:
     """Build processing chain for 'other' stem (instruments, synths, FX).
 
@@ -451,14 +527,29 @@ def build_other_recipe(
         elif rms < -30:
             vol = 0.0
 
-    pan = 0.15
-    decisions.append("Pan: R15%")
+    # ── Pan — brain-guided or default ──
+    if stem_plan and getattr(stem_plan, 'stereo_width', 0):
+        # Wider instruments get more pan spread
+        sw = stem_plan.stereo_width
+        pan = round(min(0.5, (sw - 1.0) * 0.5), 2) if sw > 1.0 else 0.0
+        decisions.append(f"🧠 Pan: {'R' if pan > 0 else 'C'}{abs(pan)*100:.0f}% (width={sw:.1f})")
+    else:
+        pan = 0.15
+        decisions.append("Pan: R15%")
 
+    # ── Sends — brain-guided or generic ──
+    if stem_plan:
+        rev_wet = getattr(stem_plan, 'reverb_wet', 0.25)
+        del_wet = getattr(stem_plan, 'delay_wet', 0.08)
+    else:
+        rev_wet = 0.25
+        del_wet = 0.08
     sends = [
-        SendConfig(bus_name="reverb", amount=0.25, pre_fader=False),
-        SendConfig(bus_name="delay", amount=0.08, pre_fader=False),
+        SendConfig(bus_name="reverb", amount=rev_wet, pre_fader=False),
+        SendConfig(bus_name="delay", amount=del_wet, pre_fader=False),
     ]
-    decisions.append("Reverb 25% | Delay 8%")
+    brain_tag = " 🧠" if stem_plan else ""
+    decisions.append(f"Reverb {rev_wet:.0%} | Delay {del_wet:.0%}{brain_tag}")
 
     chain = EffectChain(
         name="other_pro", eq_bands=eq_bands, compressor=comp,
@@ -488,6 +579,7 @@ def build_recipe_for_stem(
     bpm: float = 120.0,
     ear_data: dict[str, Any] | None = None,
     ref_targets: dict[str, dict[str, Any]] | None = None,
+    stem_plan: Any | None = None,
 ) -> StemRecipe:
     """Build the optimal processing recipe for a stem.
 
@@ -497,16 +589,17 @@ def build_recipe_for_stem(
         bpm: Track BPM for tempo-synced effects
         ear_data: Full EAR analysis data (optional, for context)
         ref_targets: Per-stem reference targets from DNA Bank (optional)
+        stem_plan: Optional StemPlan from DNABrain (overrides generic params)
 
     Returns:
         StemRecipe with chain, volume, pan, sends, and description.
-        When ref_targets is provided, all decisions are gap-driven.
+        When stem_plan is provided, EQ/comp/FX are brain-guided.
     """
     ref_target = (ref_targets or {}).get(stem_name)
     builder = _STEM_BUILDERS.get(stem_name, build_other_recipe)
     if stem_name == "other":
-        return builder(stem_analysis, bpm=bpm, ref_target=ref_target, ear_data=ear_data)
-    return builder(stem_analysis, bpm=bpm, ref_target=ref_target)
+        return builder(stem_analysis, bpm=bpm, ref_target=ref_target, ear_data=ear_data, stem_plan=stem_plan)
+    return builder(stem_analysis, bpm=bpm, ref_target=ref_target, stem_plan=stem_plan)
 
 
 def build_all_recipes(

@@ -237,6 +237,40 @@ export interface ReferenceEntry {
     lufs: number;
     stems: string[];
     created_at: string;
+    deep?: boolean;
+}
+
+export interface DeepProfile {
+    reference_count: number;
+    deep_count: number;
+    dominant_key: string;
+    master: { lufs: number; bpm: number; count: number };
+    percussion: {
+        palette: Record<string, number>;
+        dominant: string[];
+        avg_density: number;
+        total_hits_across_refs: number;
+    };
+    bass: {
+        dominant_type: string;
+        types_found: Record<string, number>;
+    };
+    instruments: {
+        palette: string[];
+        frequency: Record<string, number>;
+    };
+    fx: {
+        palette: string[];
+        frequency: Record<string, number>;
+    };
+    vocals: {
+        effects: string[];
+        frequency: Record<string, number>;
+    };
+    arrangement: {
+        avg_sections: number;
+        sidechain_ratio: number;
+    };
 }
 
 export interface GapReport {
@@ -276,4 +310,8 @@ export async function getGapAnalysis(jobId: string) {
 
 export async function removeReference(trackId: string) {
     return api<{ message: string }>(`/api/reference/${trackId}`, { method: "DELETE" });
+}
+
+export async function getDeepProfile() {
+    return api<DeepProfile>("/api/reference/deep-profile");
 }

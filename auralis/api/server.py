@@ -13,6 +13,7 @@ from auralis.api.routes.hands import router as hands_router
 from auralis.api.routes.reconstruct import router as reconstruct_router
 from auralis.api.routes.reconstruct import media_router as reconstruct_media_router
 from auralis.api.routes.reference import router as reference_router
+from auralis.api.routes.samples import router as samples_router
 from auralis.api.websocket import websocket_endpoint
 
 app = FastAPI(
@@ -72,6 +73,11 @@ app.include_router(
 )
 app.include_router(
     reference_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    samples_router,
     prefix="/api",
     dependencies=[Depends(get_current_user)],
 )

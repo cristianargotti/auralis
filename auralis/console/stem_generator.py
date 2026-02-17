@@ -289,6 +289,7 @@ def generate_bass_stem(
     duration_s: float,
     style: str = "simple",
     sr: int = 44100,
+    stem_plan: Any | None = None,
 ) -> NDArray[np.float64]:
     """Generate a bass stem via synthesis."""
     # Generate pattern
@@ -299,8 +300,12 @@ def generate_bass_stem(
     )
     note_events = pattern_to_note_events(pattern, bpm)
 
-    # Select voice
-    patch_name = "bass_808" if bpm < 130 else "acid_303"
+    # Select voice — brain-guided or BPM fallback
+    if stem_plan and getattr(stem_plan, 'patch', ''):
+        patch_name = stem_plan.patch
+        logger.info("stem_generator.bass_brain_patch", patch=patch_name)
+    else:
+        patch_name = "bass_808" if bpm < 130 else "acid_303"
     patch = PRESETS.get(patch_name)
     voice = patch.voice if patch else VoiceConfig()
 
@@ -322,6 +327,7 @@ def generate_pad_stem(
     scale: str,
     duration_s: float,
     sr: int = 44100,
+    stem_plan: Any | None = None,
 ) -> NDArray[np.float64]:
     """Generate a pad/harmony stem via synthesis."""
     # Generate chord progression
@@ -331,8 +337,12 @@ def generate_pad_stem(
     )
     note_events = pattern_to_note_events(pattern, bpm)
 
-    # Select voice
-    patch_name = "pad_warm" if bpm < 125 else "supersaw"
+    # Select voice — brain-guided or BPM fallback
+    if stem_plan and getattr(stem_plan, 'patch', ''):
+        patch_name = stem_plan.patch
+        logger.info("stem_generator.pad_brain_patch", patch=patch_name)
+    else:
+        patch_name = "pad_warm" if bpm < 125 else "supersaw"
     patch = PRESETS.get(patch_name)
     voice = patch.voice if patch else VoiceConfig()
 
@@ -360,6 +370,7 @@ def generate_stem(
     output_dir: Path,
     reference_stem_path: str | None = None,
     sr: int = 44100,
+    stem_plan: Any | None = None,
 ) -> Path | None:
     """Generate a replacement or enhancement stem based on the decision.
 
@@ -375,6 +386,7 @@ def generate_stem(
         output_dir: Where to save the generated stem.
         reference_stem_path: Path to reference drum stem (for one-shot extraction).
         sr: Sample rate.
+        stem_plan: Optional StemPlan from DNABrain for enriched prompts.
 
     Returns:
         Path to generated WAV file, or None if generation failed.
@@ -393,19 +405,74 @@ def generate_stem(
         style=decision.pattern_style,
     )
 
+    # ── 🌿 ORGANIC-FIRST: check real sample pack ────────
+    # When brain detects organic instruments, try pack BEFORE AI/synthesis
+    if stem_plan and getattr(stem_plan, 'use_organic', False):
+        organic_cat = getattr(stem_plan, 'organic_category', '')
+        if organic_cat:
+            try:
+                from auralis.console.organic_pack import OrganicPack
+                pack = OrganicPack.load()
+                sample = pack.find_best(
+                    category=organic_cat,
+                    bpm=bpm,
+                    bpm_tolerance=5.0,
+                    key=key if key else None,
+                )
+                if sample:
+                    audio_data = pack.load_audio(sample, sr=sr)
+                    if audio_data is not None:
+                        # Trim/loop to target duration
+                        target_samples = int(duration_s * sr)
+                        if len(audio_data) > target_samples:
+                            audio_data = audio_data[:target_samples]
+                        elif len(audio_data) < target_samples:
+                            # Loop the organic sample
+                            repeats = (target_samples // len(audio_data)) + 1
+                            audio_data = np.tile(audio_data, repeats)[:target_samples]
+
+                        out_path = output_dir / f"{stem_name}_organic.wav"
+                        sf.write(str(out_path), audio_data, sr, subtype="FLOAT")
+                        logger.info(
+                            "stem_generator.organic_hit",
+                            category=organic_cat,
+                            sample=sample.filename,
+                            pack=sample.pack,
+                        )
+                        return out_path
+                else:
+                    logger.info(
+                        "stem_generator.organic_miss",
+                        category=organic_cat,
+                        msg="No matching organic sample, falling through to AI/synth",
+                    )
+            except Exception as e:
+                logger.warning("stem_generator.organic_error", error=str(e))
+
     # ── AI GENERATION (Phase 5) ─────────────────────────
     # For tonal elements, try Stable Audio first
     if stem_name in ("bass", "other", "vocals") and action in ("replace", "enhance"):
         ai = _get_ai_client()
         if ai and ai.api_token:
-            # Construct intelligent prompt
-            genre_hint = "electronic"  # Could be derived from global context if available
-            style = decision.pattern_style or "modern"
-            prompt = (
-                f"{style} {stem_name} loop, {genre_hint} genre, "
-                f"{bpm} BPM, key of {key} {scale}, "
-                f"high fidelity, pro production, {decision.synth_patch or ''}"
-            ).strip()
+            # Build DNA-enriched prompt from brain plan
+            if stem_plan and getattr(stem_plan, 'ai_prompt_hints', []):
+                hints = ", ".join(stem_plan.ai_prompt_hints)
+                prompt = (
+                    f"{hints}, "
+                    f"high fidelity, pro production"
+                ).strip()
+                logger.info("stem_generator.ai_brain_prompt", prompt=prompt)
+            else:
+                # Fallback prompt — derive genre from brain hints or keep neutral
+                genre_hint = "music"
+                if stem_plan and getattr(stem_plan, 'style', ''):
+                    genre_hint = stem_plan.style
+                style = decision.pattern_style or "modern"
+                prompt = (
+                    f"{style} {stem_name} loop, {genre_hint}, "
+                    f"{bpm} BPM, key of {key} {scale}, "
+                    f"high fidelity, pro production, {decision.synth_patch or ''}"
+                ).strip()
             
             # For ENHANCE, we might want a "texture" or "layer"
             if action == "enhance":
@@ -454,7 +521,7 @@ def generate_stem(
             audio = generate_bass_stem(bpm, key, scale, duration_s, style, sr)
 
         elif stem_name == "other":
-            audio = generate_pad_stem(bpm, key, scale, duration_s, sr)
+            audio = generate_pad_stem(bpm, key, scale, duration_s, sr, stem_plan=stem_plan)
 
         else:
             logger.warning("stem_generator.unsupported", stem=stem_name)
