@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
     Card,
     CardContent,
@@ -16,6 +16,9 @@ import {
     removeReference,
     getGapAnalysis,
     getReferenceAverages,
+    uploadTrack,
+    startAnalysis,
+    getJobStatus,
     api,
     type ReferenceEntry,
     type GapReport,
@@ -42,6 +45,11 @@ export default function ReferenceBankPage() {
     const [gapJobId, setGapJobId] = useState<string>("");
     const [gapLoading, setGapLoading] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
+
+    // Upload state
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [uploadingRef, setUploadingRef] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -109,6 +117,56 @@ export default function ReferenceBankPage() {
         }
     };
 
+    const handleUploadReference = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setUploadingRef(true);
+        setUploadProgress(0);
+        setMessage("⏳ Uploading reference...");
+
+        try {
+            // 1. Upload
+            const up = await uploadTrack(file);
+            setUploadProgress(25);
+            setMessage("⏳ Analyzing structure...");
+
+            // 2. Analyze
+            const job = await startAnalysis(up.project_id);
+            setUploadProgress(50);
+
+            // 3. Poll for completion
+            const poll = setInterval(async () => {
+                try {
+                    const status = await getJobStatus(job.job_id);
+                    if (status.status === "complete") {
+                        clearInterval(poll);
+                        setUploadProgress(90);
+                        setMessage("⏳ Adding to bank...");
+
+                        // 4. Add to bank
+                        await addReference(status.job_id, file.name);
+                        setMessage(`✅ Added ${file.name} to references`);
+                        setUploadingRef(false);
+                        loadData();
+                    } else if (status.status === "error") {
+                        clearInterval(poll);
+                        throw new Error(status.message);
+                    }
+                } catch (err) {
+                    clearInterval(poll);
+                    setUploadingRef(false);
+                    const msg = err instanceof Error ? err.message : "Polling error";
+                    setMessage(`❌ ${msg}`);
+                }
+            }, 1000);
+        } catch (err) {
+            setUploadingRef(false);
+            const msg = err instanceof Error ? err.message : "Upload failed";
+            setMessage(`❌ ${msg}`);
+        }
+    };
+
     const alreadyInBank = new Set(references.map((r) => r.track_id));
     const availableJobs = jobs.filter((j) => !alreadyInBank.has(j.job_id));
 
@@ -122,6 +180,26 @@ export default function ReferenceBankPage() {
                     your music against these DNA fingerprints to auto-correct
                     toward reference quality.
                 </p>
+            </div>
+
+            {/* Direct Upload Action */}
+            <div className="flex justify-end">
+                <Button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingRef}
+                    className="bg-gradient-auralis shadow-lg shadow-cyan-500/20"
+                >
+                    {uploadingRef ? (
+                        <>
+                            <span className="w-4 h-4 mr-2 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>
+                            Processing... {uploadProgress}%
+                        </>
+                    ) : (
+                        <>
+                            <span className="mr-2">📤</span> Upload Reference
+                        </>
+                    )}
+                </Button>
             </div>
 
             {/* Status Message */}
@@ -143,6 +221,16 @@ export default function ReferenceBankPage() {
                         </div>
                     </CardContent>
                 </Card>
+
+                {/* Upload Button overlay */}
+                <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    accept=".wav,.mp3,.flac,.aiff"
+                    onChange={handleUploadReference}
+                />
+
                 <Card className="glass-strong border-border/30">
                     <CardContent className="p-4 text-center">
                         <div className="text-3xl font-bold text-auralis-cyan">
@@ -378,8 +466,8 @@ export default function ReferenceBankPage() {
                                     <Badge
                                         variant="outline"
                                         className={`ml-2 text-[10px] ${Math.abs(gapReport.lufs_gap) < 2
-                                                ? "border-auralis-emerald/30 text-auralis-emerald"
-                                                : "border-destructive/30 text-destructive"
+                                            ? "border-auralis-emerald/30 text-auralis-emerald"
+                                            : "border-destructive/30 text-destructive"
                                             }`}
                                     >
                                         {gapReport.lufs_gap > 0 ? "+" : ""}
@@ -411,11 +499,11 @@ export default function ReferenceBankPage() {
                                                 <Badge
                                                     variant="outline"
                                                     className={`text-[10px] ${gap.quality_score >= 80
-                                                            ? "border-auralis-emerald/30 text-auralis-emerald"
-                                                            : gap.quality_score >=
-                                                                60
-                                                                ? "border-auralis-cyan/30 text-auralis-cyan"
-                                                                : "border-destructive/30 text-destructive"
+                                                        ? "border-auralis-emerald/30 text-auralis-emerald"
+                                                        : gap.quality_score >=
+                                                            60
+                                                            ? "border-auralis-cyan/30 text-auralis-cyan"
+                                                            : "border-destructive/30 text-destructive"
                                                         }`}
                                                 >
                                                     {gap.quality_score.toFixed(0)}

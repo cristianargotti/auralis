@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, apiFetch } from "@/lib/api";
+import { api, apiFetch, listReferences, type ReferenceEntry } from "@/lib/api";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 
 const WaveformXRay = dynamic(
@@ -155,6 +156,8 @@ const QC_DIMENSIONS = [
 export default function ReconstructPage() {
     const [projectId, setProjectId] = useState("");
     const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
+    const [references, setReferences] = useState<ReferenceEntry[]>([]);
+    const [refLoading, setRefLoading] = useState(true);
     const [job, setJob] = useState<ReconstructJob | null>(null);
     const [loading, setLoading] = useState(false);
     const [reconstructing, setReconstructing] = useState(false);
@@ -184,6 +187,16 @@ export default function ReconstructPage() {
         }, 1000);
         return () => clearInterval(timer);
     }, [pipelineStartTime, reconstructing]);
+
+    // Load References
+    useEffect(() => {
+        listReferences()
+            .then((data) => {
+                setReferences(data.references);
+                setRefLoading(false);
+            })
+            .catch(() => setRefLoading(false));
+    }, []);
 
     // Track stage timings
     useEffect(() => {
@@ -405,6 +418,65 @@ export default function ReconstructPage() {
                     </p>
                 </div>
             </div>
+
+            {/* Phase 1: References (Context) */}
+            <div className="grid md:grid-cols-[1fr_200px] gap-4 items-end mb-6 border-b border-zinc-800 pb-6">
+                <Card className="bg-zinc-900/30 border-zinc-800/50">
+                    <CardHeader className="pb-3 pt-4">
+                        <CardTitle className="text-sm flex items-center gap-2 text-zinc-400">
+                            <span>🧬</span> Phase 1: DNA References
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="pb-4">
+                        {refLoading ? (
+                            <div className="h-8 w-full bg-zinc-800/50 rounded animate-pulse" />
+                        ) : references.length === 0 ? (
+                            <div className="flex items-center justify-between bg-amber-500/10 text-amber-500 px-3 py-2 rounded-lg text-sm border border-amber-500/20">
+                                <span>⚠️ No references set. Auralis will guess the style.</span>
+                                <Link href="/reference">
+                                    <Button variant="outline" size="sm" className="h-7 border-amber-500/30 text-amber-400 hover:bg-amber-500/20">
+                                        + Add Refs
+                                    </Button>
+                                </Link>
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <div className="text-sm text-zinc-300">
+                                        <span className="text-emerald-400 font-bold">{references.length} active references</span> loaded.
+                                        Targeting average <span className="font-mono text-cyan-400">
+                                            {Math.round(references.reduce((a, b) => a + b.bpm, 0) / references.length)} BPM
+                                        </span>.
+                                    </div>
+                                    <Link href="/reference">
+                                        <Button variant="ghost" size="sm" className="h-6 text-xs text-zinc-500 hover:text-zinc-300">
+                                            Manage
+                                        </Button>
+                                    </Link>
+                                </div>
+                                <div className="flex gap-2 overflow-x-auto pb-1">
+                                    {references.slice(0, 5).map(ref => (
+                                        <Badge key={ref.track_id} variant="outline" className="text-[10px] border-zinc-700 text-zinc-500 bg-zinc-900/50 whitespace-nowrap">
+                                            {ref.name}
+                                        </Badge>
+                                    ))}
+                                    {references.length > 5 && (
+                                        <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500">+{references.length - 5}</Badge>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+                <div className="hidden md:block pb-2 text-center opacity-50">
+                    <div className="text-2xl mb-1">⬇️</div>
+                    <div className="text-xs text-zinc-500 font-medium uppercase tracking-wider">then</div>
+                </div>
+            </div>
+
+            <h3 className="text-sm font-medium text-zinc-400 mb-2 flex items-center gap-2">
+                <span>🎯</span> Phase 2: Upload Target Track
+            </h3>
 
             {/* Upload + Start */}
             <Card className="bg-zinc-900/50 border-zinc-800">
