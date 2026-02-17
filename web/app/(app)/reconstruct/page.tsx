@@ -23,6 +23,11 @@ const AudioPlayer = dynamic(
     { ssr: false, loading: () => <div className="h-48 bg-zinc-900/50 rounded-xl animate-pulse" /> }
 );
 
+const BarByBar = dynamic(
+    () => import("@/components/bar-by-bar"),
+    { ssr: false, loading: () => <div className="h-40 bg-zinc-900/50 rounded-xl animate-pulse" /> }
+);
+
 /* ── Types (track-agnostic) ──────────────────────────── */
 
 interface StageStatus {
@@ -739,6 +744,11 @@ export default function ReconstructPage() {
                         </CardContent>
                     </Card>
                 </div>
+            )}
+
+            {/* 🎼 Bar-by-Bar Reconstruction */}
+            {job && job.status === "completed" && xrayAnalysis && (
+                <BarByBar xrayAnalysis={xrayAnalysis} />
             )}
 
             {/* Live Logs Terminal */}
