@@ -1,19 +1,15 @@
-"""AURALIS Stem Generator — Hybrid one-shot extraction + synthesis.
+"""AURALIS Stem Generator — Hybrid AI + organic + synthesis.
 
-Two generation strategies:
-  1. ORGANIC (drums/percussion) → Extract one-shots from reference bank
-     stems via onset detection, then sequence into new patterns.
-  2. SYNTH (bass/pads/leads) → Generate via grid/midi patterns +
-     hands/synth engine, matched to the user track's BPM & key.
+Three generation strategies (in priority order):
+  1. ORGANIC (drums/percussion) → Real samples from OrganicPack matched by
+     category, BPM, and key.
+  2. AI (bass/pads/leads/FX) → Stable Audio Open via Replicate API with
+     DNA-derived prompts for high-fidelity generation.
+  3. SYNTH (fallback) → Grid/MIDI patterns + hands/synth engine.
 
 The engine NEVER copies full loops.  It extracts individual hits (kick,
 snare, hat) and re-sequences them in original patterns.  For tonal
-elements, it generates new audio from scratch via synthesis.
-
-Future upgrades:
-  - DOSE (arxiv 2025): Neural one-shot extraction from full mixes
-  - ACE-Step 1.5 (Feb 2026): Commercial-grade generation on consumer HW
-  - Stable Audio Open: Text-to-audio for FX/ambience
+elements, it generates new audio via AI or synthesis.
 """
 
 from __future__ import annotations
@@ -56,6 +52,198 @@ def _get_ai_client() -> Any:
             _AI_CLIENT = False
     return _AI_CLIENT if _AI_CLIENT is not False else None
 
+
+
+# ── AI Prompt Construction ──────────────────────────────
+
+
+def _build_ai_prompt(
+    stem_name: str,
+    action: str,
+    bpm: float,
+    key: str,
+    scale: str,
+    decision: StemDecision,
+    stem_plan: Any | None = None,
+) -> str:
+    """Build a rich text-to-audio prompt from DNA brain hints + musical context.
+
+    The prompt quality directly determines AI generation quality.
+    Brain-derived hints are the primary source; fallback templates fill gaps.
+    """
+    parts: list[str] = []
+
+    # ── Primary: brain-derived hints (most specific) ──
+    if stem_plan and getattr(stem_plan, "ai_prompt_hints", []):
+        parts.extend(stem_plan.ai_prompt_hints)
+
+    # ── Musical context ──
+    parts.append(f"{bpm:.0f} BPM")
+    parts.append(f"key of {key} {scale}")
+
+    # ── Stem-specific templates ──
+    style = ""
+    if stem_plan and getattr(stem_plan, "style", ""):
+        style = stem_plan.style
+    patch = decision.synth_patch or ""
+
+    if stem_name == "bass":
+        if not any("bass" in p.lower() for p in parts):
+            parts.insert(0, f"{style or 'deep'} bass loop")
+        if patch:
+            parts.append(f"{patch} tone")
+        # Bass-specific quality cues
+        parts.append("sub-heavy, warm, punchy")
+
+    elif stem_name == "other":
+        if not any("instrument" in p.lower() or "pad" in p.lower() for p in parts):
+            parts.insert(0, f"{style or 'melodic'} instrument loop")
+        if patch:
+            parts.append(f"{patch} timbre")
+        parts.append("lush, textured")
+
+    elif stem_name == "vocals":
+        if not any("vocal" in p.lower() for p in parts):
+            parts.insert(0, "vocal chop loop")
+        parts.append("processed, ethereal")
+
+    elif stem_name == "drums":
+        if not any("drum" in p.lower() for p in parts):
+            parts.insert(0, f"{style or 'four on the floor'} drum loop")
+        parts.append("punchy, crisp transients")
+
+    # ── Action modifier ──
+    if action == "enhance":
+        parts.append("atmospheric texture, subtle layer")
+    else:
+        parts.append("full arrangement, standalone")
+
+    # ── Quality suffix ──
+    parts.append("high fidelity, professional production, studio quality")
+
+    # Build final prompt — deduplicate and clean
+    seen: set[str] = set()
+    clean: list[str] = []
+    for p in parts:
+        p = p.strip().rstrip(",")
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            clean.append(p)
+
+    prompt = ", ".join(clean)
+    logger.info("stem_generator.prompt_built", stem=stem_name, prompt=prompt)
+    return prompt
+
+
+def _postprocess_ai_stem(
+    ai_path: Path,
+    stem_name: str,
+    target_duration_s: float,
+    sr: int,
+    output_dir: Path,
+) -> Path | None:
+    """Post-process AI-generated audio to match target duration + normalize.
+
+    Steps:
+      1. Load and validate AI output
+      2. Trim or loop with crossfade to exact target duration
+      3. Peak-normalize to -1 dBFS
+      4. Save as stereo WAV
+    """
+    try:
+        audio, file_sr = sf.read(str(ai_path), dtype="float64")
+
+        # Resample if needed
+        if file_sr != sr:
+            try:
+                import librosa
+                if audio.ndim > 1:
+                    audio = np.mean(audio, axis=1)
+                audio = librosa.resample(audio, orig_sr=file_sr, target_sr=sr)
+            except ImportError:
+                logger.warning("stem_generator.no_librosa_resample")
+
+        # Convert to mono for processing
+        if audio.ndim > 1:
+            mono = np.mean(audio, axis=1)
+        else:
+            mono = audio
+
+        target_samples = int(target_duration_s * sr)
+
+        if len(mono) >= target_samples:
+            # Trim to target
+            mono = mono[:target_samples]
+        else:
+            # Loop with crossfade for seamless looping
+            crossfade_samples = min(int(0.05 * sr), len(mono) // 4)  # 50ms crossfade
+            mono = _loop_with_crossfade(mono, target_samples, crossfade_samples)
+
+        # Peak normalize to -1 dBFS
+        peak = np.max(np.abs(mono))
+        if peak > 0:
+            target_peak = 10 ** (-1.0 / 20)  # -1 dBFS
+            mono = mono * (target_peak / peak)
+
+        # Make stereo
+        stereo = np.column_stack([mono, mono])
+
+        # Save
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        out_path = output_dir / f"ai_{stem_name}.wav"
+        sf.write(str(out_path), stereo, sr, subtype="PCM_24")
+
+        # Clean up raw AI file
+        try:
+            ai_path.unlink()
+        except Exception:
+            pass
+
+        return out_path
+
+    except Exception as e:
+        logger.error("stem_generator.postprocess_failed", error=str(e))
+        return None
+
+
+def _loop_with_crossfade(
+    audio: NDArray[np.float64],
+    target_samples: int,
+    crossfade_samples: int,
+) -> NDArray[np.float64]:
+    """Loop audio to target length with smooth crossfade at loop points."""
+    if len(audio) == 0:
+        return np.zeros(target_samples)
+
+    result = np.zeros(target_samples)
+    pos = 0
+    loop_len = len(audio)
+
+    while pos < target_samples:
+        remaining = target_samples - pos
+        chunk_len = min(loop_len, remaining)
+        chunk = audio[:chunk_len].copy()
+
+        # Apply crossfade at loop boundaries (not first iteration)
+        if pos > 0 and crossfade_samples > 0:
+            fade_len = min(crossfade_samples, chunk_len, pos)
+            if fade_len > 0:
+                fade_in = np.linspace(0, 1, fade_len)
+                fade_out = np.linspace(1, 0, fade_len)
+                # Crossfade: blend end of previous with start of new
+                chunk[:fade_len] *= fade_in
+                result[pos : pos + fade_len] *= fade_out
+                result[pos : pos + fade_len] += chunk[:fade_len]
+                result[pos + fade_len : pos + chunk_len] = chunk[fade_len:]
+            else:
+                result[pos : pos + chunk_len] = chunk
+        else:
+            result[pos : pos + chunk_len] = chunk
+
+        pos += chunk_len
+
+    return result
 
 
 # ── One-Shot Extraction (Organic) ───────────────────────
@@ -449,48 +637,37 @@ def generate_stem(
             except Exception as e:
                 logger.warning("stem_generator.organic_error", error=str(e))
 
-    # ── AI GENERATION (Phase 5) ─────────────────────────
-    # For tonal elements, try Stable Audio first
+    # ── AI GENERATION ────────────────────────────────────
+    # For tonal/melodic elements, try Stable Audio first
     if stem_name in ("bass", "other", "vocals") and action in ("replace", "enhance"):
         ai = _get_ai_client()
         if ai and ai.api_token:
-            # Build DNA-enriched prompt from brain plan
-            if stem_plan and getattr(stem_plan, 'ai_prompt_hints', []):
-                hints = ", ".join(stem_plan.ai_prompt_hints)
-                prompt = (
-                    f"{hints}, "
-                    f"high fidelity, pro production"
-                ).strip()
-                logger.info("stem_generator.ai_brain_prompt", prompt=prompt)
-            else:
-                # Fallback prompt — derive genre from brain hints or keep neutral
-                genre_hint = "music"
-                if stem_plan and getattr(stem_plan, 'style', ''):
-                    genre_hint = stem_plan.style
-                style = decision.pattern_style or "modern"
-                prompt = (
-                    f"{style} {stem_name} loop, {genre_hint}, "
-                    f"{bpm} BPM, key of {key} {scale}, "
-                    f"high fidelity, pro production, {decision.synth_patch or ''}"
-                ).strip()
-            
-            # For ENHANCE, we might want a "texture" or "layer"
-            if action == "enhance":
-                prompt += ", atmospheric texture, layering tool"
+            prompt = _build_ai_prompt(stem_name, action, bpm, key, scale, decision, stem_plan)
+            logger.info("stem_generator.ai_attempt", prompt=prompt, stem=stem_name)
 
-            logger.info("stem_generator.ai_attempt", prompt=prompt)
-            
+            # Request slightly longer than needed for crossfade room
+            request_seconds = min(duration_s + 2.0, 47.0)  # Stable Audio max = 47s
+
             ai_path = ai.generate_loop(
                 prompt=prompt,
                 bpm=bpm,
-                seconds=duration_s,
+                seconds=request_seconds,
                 output_dir=output_dir,
             )
-            
+
             if ai_path:
-                logger.info("stem_generator.ai_success", path=str(ai_path))
-                return ai_path
-            
+                # Post-process: trim/loop/crossfade to exact duration, normalize
+                final_path = _postprocess_ai_stem(
+                    ai_path, stem_name, duration_s, sr, output_dir
+                )
+                if final_path:
+                    logger.info(
+                        "stem_generator.ai_success",
+                        path=str(final_path),
+                        duration=f"{duration_s:.1f}s",
+                    )
+                    return final_path
+
             logger.warning("stem_generator.ai_failed", msg="Falling back to synth")
 
     # ── ALGORITHMIC FALLBACK ────────────────────────────

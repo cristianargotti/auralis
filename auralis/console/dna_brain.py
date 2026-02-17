@@ -384,11 +384,13 @@ def _think_drums(ev: Evidence) -> StemPlan:
 
     # ── AI generation hints ──
     dominant_str = ", ".join(ev.percussion_dominant[:3]) if ev.percussion_dominant else "standard"
+    density_desc = "sparse" if ev.percussion_density < 3 else "medium" if ev.percussion_density < 6 else "dense"
     plan.ai_prompt_hints = [
         f"{plan.style} drum pattern",
         f"dominant elements: {dominant_str}",
         f"{ev.bpm:.0f} BPM",
-        f"density: {ev.percussion_density:.1f} hits/sec",
+        f"{density_desc} rhythm, {ev.percussion_density:.1f} hits/sec",
+        f"{'loop-ready, seamless' if ev.bpm >= 100 else 'groove-based'}",
     ]
 
     plan.reasoning = reasons
@@ -506,11 +508,15 @@ def _think_bass(ev: Evidence) -> StemPlan:
     }
 
     # ── AI prompt hints ──
+    bass_desc = ev.bass_type or "bass"
+    sidechain_desc = "with sidechain pumping" if plan.sidechain else "steady groove"
     plan.ai_prompt_hints = [
-        f"{ev.bass_type or 'bass'} bass line",
+        f"{bass_desc} bass line",
         f"{plan.style} pattern",
         f"{ev.bpm:.0f} BPM, key of {ev.key} {ev.scale}",
-        f"{'with sidechain pumping' if plan.sidechain else 'steady'}",
+        sidechain_desc,
+        f"{'deep sub-bass, 808-style' if 'sub' in bass_desc.lower() else 'mid-range bass, defined tone'}",
+        "clean low-end, no mud",
     ]
 
     plan.reasoning = reasons
@@ -585,7 +591,8 @@ def _think_vocals(ev: Evidence) -> StemPlan:
     fx_str = ", ".join(ev.vocal_effects[:3]) if ev.vocal_effects else "clean"
     plan.ai_prompt_hints = [
         f"vocal processing: {fx_str}",
-        f"{'wet/spacious' if has_reverb else 'dry/intimate'} vocal style",
+        f"{'wet, spacious, reverb-heavy' if has_reverb else 'dry, intimate, close-mic'} vocal style",
+        f"{'chopped vocal textures' if ev.vocal_energy < 20 else 'lead vocal, clear diction'}",
     ]
 
     plan.reasoning = reasons
@@ -707,11 +714,14 @@ def _think_other(ev: Evidence) -> StemPlan:
         )
 
     # ── AI prompt hints ──
+    instruments_str = ", ".join(ev.instruments[:4]) or "melodic"
     plan.ai_prompt_hints.extend(
         [
             f"{best} instrument texture",
             f"{ev.bpm:.0f} BPM, key of {ev.key} {ev.scale}",
-            f"instruments: {', '.join(ev.instruments[:4]) or 'melodic'}",
+            f"instruments: {instruments_str}",
+            f"{'evolving, atmospheric' if plan.reverb_wet > 0.2 else 'defined, present'}",
+            f"{'rhythmic, syncopated' if plan.delay_wet > 0.1 else 'sustained, smooth'}",
         ]
     )
 
