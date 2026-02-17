@@ -4,6 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile.api
     env_file: .env
+    environment:
+      - AURALIS_JWT_SECRET=auralis-persistent-secret-2026-fixed-v1
+      # Auto-scaling: Let PyTorch/Uvicorn detect available cores
     restart: unless-stopped
     volumes:
       - ml_models:/root/.cache    # Persist HTDemucs model weights (~320MB)

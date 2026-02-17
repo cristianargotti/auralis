@@ -28,14 +28,7 @@ router = APIRouter(prefix="/reconstruct", tags=["reconstruct"])
 _reconstruct_jobs: dict[str, dict[str, Any]] = {}
 
 
-def _log(job: dict[str, Any], msg: str, level: str = "info") -> None:
-    """Append a timestamped log entry to a job."""
-    from datetime import datetime, timezone
-    job.setdefault("logs", []).append({
-        "ts": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-        "level": level,
-        "msg": msg,
-    })
+
 
 
 class ReconstructRequest(BaseModel):
@@ -47,6 +40,46 @@ class ReconstructRequest(BaseModel):
     use_gpu: bool = False
     # Separator preference: "auto", "mel_roformer", "htdemucs", "htdemucs_ft"
     separator: str = "auto"
+
+
+# ── Persistence ─────────────────────────────────────────
+
+JOBS_FILE = settings.projects_dir / "jobs.json"
+
+def _load_jobs() -> None:
+    """Load jobs from disk on startup."""
+    global _reconstruct_jobs
+    if JOBS_FILE.exists():
+        try:
+            data = json.loads(JOBS_FILE.read_text())
+            _reconstruct_jobs = data
+            print(f"Loaded {len(_reconstruct_jobs)} jobs from {JOBS_FILE}")
+        except Exception as e:
+            print(f"Failed to load jobs: {e}")
+
+def _save_jobs() -> None:
+    """Save all jobs to disk."""
+    try:
+        # Sanitize before saving to avoid numpy errors
+        data = _sanitize_for_json(_reconstruct_jobs)
+        JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        JOBS_FILE.write_text(json.dumps(data, indent=2, default=str))
+    except Exception as e:
+        print(f"Failed to save jobs: {e}")
+
+# Load immediately on import (module level)
+_load_jobs()
+
+
+def _log(job: dict[str, Any], msg: str, level: str = "info") -> None:
+    """Append a timestamped log entry to a job."""
+    from datetime import datetime, timezone
+    job.setdefault("logs", []).append({
+        "ts": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        "level": level,
+        "msg": msg,
+    })
+    _save_jobs()
 
 
 class SectionCompareRequest(BaseModel):
@@ -160,6 +193,7 @@ async def start_reconstruction(req: ReconstructRequest) -> dict[str, Any]:
     _log(_reconstruct_jobs[job_id], f"Mode: {req.mode} | Separator: {req.separator}", "info")
 
     asyncio.create_task(_run_reconstruction(job_id, req))
+    _save_jobs()
 
     return _reconstruct_jobs[job_id]
 

@@ -26,7 +26,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 # JWT config
 _ALGORITHM = "HS256"
-_TOKEN_EXPIRE_HOURS = 24
+_TOKEN_EXPIRE_HOURS = 168  # 7 days
 
 
 class TokenResponse(BaseModel):
