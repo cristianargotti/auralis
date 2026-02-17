@@ -20,7 +20,7 @@ def extract_waveform(audio_path: Path, points: int = 2000) -> list[float]:
         return waveform
     except Exception as e:
         print(f"Error extracting waveform from {audio_path}: {e}")
-        return []
+        return [0.0] * 100  # Return dummy data to prevent client crash
 
 def detect_drum_events(drum_stem: Path) -> list[dict[str, Any]]:
     """

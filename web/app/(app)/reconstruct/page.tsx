@@ -11,7 +11,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import WaveformXRay from "@/components/visualizer/WaveformXRay";
+import dynamic from "next/dynamic";
+
+const WaveformXRay = dynamic(
+    () => import("@/components/visualizer/WaveformXRay"),
+    { ssr: false, loading: () => <div className="h-32 bg-zinc-900/50 rounded-xl animate-pulse" /> }
+);
 
 /* ── Types (track-agnostic) ──────────────────────────── */
 
