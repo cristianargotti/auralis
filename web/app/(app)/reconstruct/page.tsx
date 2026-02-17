@@ -172,6 +172,9 @@ export default function ReconstructPage() {
     const [logsOpen, setLogsOpen] = useState(true);
     const logsEndRef = useRef<HTMLDivElement>(null);
     const [xrayAnalysis, setXrayAnalysis] = useState<any>(null);
+    const [cleaned, setCleaned] = useState(false);
+    const [freedMb, setFreedMb] = useState(0);
+    const [cleaning, setCleaning] = useState(false);
 
     // Elapsed timer
     useEffect(() => {
@@ -745,6 +748,43 @@ export default function ReconstructPage() {
                                         {icon} {stem.charAt(0).toUpperCase() + stem.slice(1)}
                                     </a>
                                 ))}
+                            </div>
+
+                            {/* Cleanup button */}
+                            <div className="mt-4 pt-3 border-t border-zinc-800/50">
+                                {cleaned ? (
+                                    <div className="flex items-center gap-2 text-xs text-emerald-400">
+                                        <span>✅</span>
+                                        <span>Cleaned — freed {freedMb} MB of disk space</span>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={async () => {
+                                            if (!job) return;
+                                            setCleaning(true);
+                                            try {
+                                                const res = await fetch(`/api/reconstruct/cleanup/${job.job_id}`, { method: "DELETE" });
+                                                if (res.ok) {
+                                                    const data = await res.json();
+                                                    setFreedMb(data.freed_mb || 0);
+                                                    setCleaned(true);
+                                                }
+                                            } catch { /* ignore */ }
+                                            setCleaning(false);
+                                        }}
+                                        disabled={cleaning}
+                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-red-950/30 border border-red-800/30 text-red-400 hover:text-red-300 hover:border-red-700/50 transition-all text-xs disabled:opacity-50"
+                                    >
+                                        {cleaning ? (
+                                            <>
+                                                <span className="w-3 h-3 rounded-full border-2 border-red-500/30 border-t-red-400 animate-spin" />
+                                                Cleaning...
+                                            </>
+                                        ) : (
+                                            <>🧹 Clean Up — Free Disk Space</>
+                                        )}
+                                    </button>
+                                )}
                             </div>
                         </CardContent>
                     </Card>

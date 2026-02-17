@@ -452,6 +452,65 @@ def _generate_spectrogram(audio_path: str, output_path: str) -> str:
     return output_path
 
 
+@router.delete("/cleanup/{job_id}")
+async def cleanup_project(job_id: str):
+    """Delete all project files + temp files to free disk space. Keeps job metadata."""
+    if job_id not in _reconstruct_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = _reconstruct_jobs[job_id]
+    project_id = job["project_id"]
+    project_dir = Path("/app/projects") / project_id
+
+    freed_bytes = 0
+
+    # 1. Delete project directory (original, stems, master, spectrograms)
+    if project_dir.exists():
+        freed_bytes += sum(
+            f.stat().st_size for f in project_dir.rglob("*") if f.is_file()
+        )
+        import shutil
+        shutil.rmtree(project_dir, ignore_errors=True)
+
+    # 2. Clean /tmp uploads and stale audio temp files
+    import shutil
+    import time
+    tmp_dir = Path("/tmp")
+    one_hour_ago = time.time() - 3600
+    for f in tmp_dir.glob("*.wav"):
+        try:
+            if f.stat().st_mtime < one_hour_ago:
+                freed_bytes += f.stat().st_size
+                f.unlink()
+        except OSError:
+            pass
+    for f in tmp_dir.glob("*.mp3"):
+        try:
+            if f.stat().st_mtime < one_hour_ago:
+                freed_bytes += f.stat().st_size
+                f.unlink()
+        except OSError:
+            pass
+    # Clean upload temp dirs
+    for d in tmp_dir.glob("upload_*"):
+        try:
+            if d.is_dir() and d.stat().st_mtime < one_hour_ago:
+                freed_bytes += sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+    freed_mb = round(freed_bytes / (1024 * 1024), 1)
+    job["cleaned"] = True
+    _save_jobs()
+
+    return {
+        "status": "cleaned",
+        "freed_mb": freed_mb,
+        "project_id": project_id,
+    }
+
+
 @router.get("/jobs")
 async def list_jobs() -> list[dict[str, Any]]:
     """List all reconstruction jobs."""
@@ -462,6 +521,7 @@ async def list_jobs() -> list[dict[str, Any]]:
             "status": j["status"],
             "stage": j["stage"],
             "progress": j["progress"],
+            "cleaned": j.get("cleaned", False),
         }
         for j in _reconstruct_jobs.values()
     ]
