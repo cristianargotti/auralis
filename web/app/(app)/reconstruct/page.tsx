@@ -156,6 +156,7 @@ export default function ReconstructPage() {
     const prevStageRef = useRef<string | null>(null);
     const [logsOpen, setLogsOpen] = useState(true);
     const logsEndRef = useRef<HTMLDivElement>(null);
+    const [xrayAnalysis, setXrayAnalysis] = useState<any>(null);
 
     // Elapsed timer
     useEffect(() => {
@@ -209,6 +210,8 @@ export default function ReconstructPage() {
                     if (updated.result?.analysis) {
                         loadAnalysis(updated.project_id);
                     }
+                    // Load X-Ray deep analysis
+                    loadXrayAnalysis(updated.job_id);
                 }
             } catch { /* ignore */ }
         }, 800);
@@ -220,6 +223,15 @@ export default function ReconstructPage() {
             const data = await api<AnalysisData>(`/api/reconstruct/analysis/${pid}`);
             setAnalysis(data);
         } catch { /* no analysis yet */ }
+    };
+
+    const loadXrayAnalysis = async (jobId: string) => {
+        try {
+            const data = await api<any>(`/api/reconstruct/waveform/${jobId}`);
+            if (data?.analysis) {
+                setXrayAnalysis(data.analysis);
+            }
+        } catch { /* waveform analysis not ready yet */ }
     };
 
     const formatBytes = (bytes: number) => {
@@ -794,6 +806,238 @@ export default function ReconstructPage() {
                                 </div>
                             );
                         })}
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* 🧬 Sonic Intelligence — Track DNA Deep Analysis */}
+            {xrayAnalysis && Object.keys(xrayAnalysis).length > 0 && (
+                <Card className="bg-zinc-900/50 border-zinc-800 overflow-hidden">
+                    <CardHeader>
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <CardTitle className="text-lg">🧬 Sonic Intelligence</CardTitle>
+                                <Badge variant="outline" className="border-purple-500/30 text-purple-400">
+                                    Track DNA
+                                </Badge>
+                            </div>
+                            <CardDescription>Deep spectral analysis — every element identified</CardDescription>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+
+                        {/* ── Arrangement Row ── */}
+                        {xrayAnalysis.arrangement && (
+                            <div>
+                                <div className="flex items-center gap-2 mb-3">
+                                    <span className="text-sm font-semibold text-zinc-300">🔗 Arrangement</span>
+                                    <div className="flex gap-2 ml-auto">
+                                        {xrayAnalysis.arrangement.key && (
+                                            <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                                                {xrayAnalysis.arrangement.key} {xrayAnalysis.arrangement.scale}
+                                            </Badge>
+                                        )}
+                                        {xrayAnalysis.arrangement.tempo_bpm > 0 && (
+                                            <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30">
+                                                {xrayAnalysis.arrangement.tempo_bpm} BPM
+                                            </Badge>
+                                        )}
+                                        {xrayAnalysis.arrangement.sidechain_detected && (
+                                            <Badge className="bg-pink-500/20 text-pink-400 border-pink-500/30">
+                                                ⛓️ Sidechain
+                                            </Badge>
+                                        )}
+                                    </div>
+                                </div>
+                                {/* Section timeline */}
+                                {xrayAnalysis.arrangement.sections?.length > 0 && (
+                                    <div className="flex gap-1 h-8 rounded-lg overflow-hidden">
+                                        {xrayAnalysis.arrangement.sections.map((sec: any, i: number) => {
+                                            const sectionColors: Record<string, string> = {
+                                                Intro: 'bg-blue-600/60',
+                                                Verse: 'bg-emerald-600/60',
+                                                Chorus: 'bg-amber-600/60',
+                                                Drop: 'bg-red-600/60',
+                                                Bridge: 'bg-purple-600/60',
+                                                Build: 'bg-orange-600/60',
+                                                Outro: 'bg-zinc-600/60',
+                                            };
+                                            const totalDur = xrayAnalysis.arrangement.sections.reduce(
+                                                (acc: number, s: any) => acc + (s.end - s.start), 0
+                                            );
+                                            const width = ((sec.end - sec.start) / totalDur) * 100;
+                                            return (
+                                                <div
+                                                    key={i}
+                                                    className={`${sectionColors[sec.label] || 'bg-zinc-700/60'} relative group flex items-center justify-center rounded transition-all hover:brightness-125 cursor-pointer`}
+                                                    style={{ width: `${Math.max(width, 2)}%` }}
+                                                    title={`${sec.label}: ${sec.start}s – ${sec.end}s`}
+                                                >
+                                                    <span className="text-[9px] font-bold text-white/80 truncate px-1">{sec.label}</span>
+                                                    <div className="absolute -bottom-5 opacity-0 group-hover:opacity-100 text-[8px] text-zinc-400 whitespace-nowrap transition-opacity">
+                                                        {Math.round(sec.start)}s–{Math.round(sec.end)}s
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* ── Instruments Grid ── */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                            {/* Drums */}
+                            {xrayAnalysis.drums && (
+                                <div className="rounded-xl border border-red-500/20 bg-gradient-to-br from-red-950/30 to-zinc-950 p-4">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="text-sm font-bold text-red-400">🥁 Percussion</span>
+                                        <Badge variant="outline" className="text-[10px] border-red-500/30 text-red-300">
+                                            {xrayAnalysis.drums.total_hits} hits
+                                        </Badge>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {xrayAnalysis.drums.instruments && Object.entries(xrayAnalysis.drums.instruments).sort((a: any, b: any) => b[1] - a[1]).map(([name, count]: [string, any]) => (
+                                            <div key={name} className="flex items-center gap-1 px-2 py-1 rounded-md bg-red-500/10 border border-red-500/20">
+                                                <span className="text-[11px] text-red-300 font-medium">{name}</span>
+                                                <span className="text-[9px] text-red-400/70 font-mono">{count}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Bass */}
+                            {xrayAnalysis.bass && (
+                                <div className="rounded-xl border border-blue-500/20 bg-gradient-to-br from-blue-950/30 to-zinc-950 p-4">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="text-sm font-bold text-blue-400">🎸 Bass</span>
+                                        <Badge variant="outline" className="text-[10px] border-blue-500/30 text-blue-300">
+                                            {xrayAnalysis.bass.type}
+                                        </Badge>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2 text-center">
+                                        <div className="bg-blue-500/10 rounded-lg p-2">
+                                            <div className="text-[10px] text-zinc-500">Confidence</div>
+                                            <div className="text-sm font-bold text-blue-300 font-mono">
+                                                {Math.round((xrayAnalysis.bass.type_confidence ?? 0) * 100)}%
+                                            </div>
+                                        </div>
+                                        <div className="bg-blue-500/10 rounded-lg p-2">
+                                            <div className="text-[10px] text-zinc-500">Notes</div>
+                                            <div className="text-sm font-bold text-blue-300 font-mono">
+                                                {xrayAnalysis.bass.summary?.total_notes ?? 0}
+                                            </div>
+                                        </div>
+                                        <div className="bg-blue-500/10 rounded-lg p-2">
+                                            <div className="text-[10px] text-zinc-500">Style</div>
+                                            <div className="text-[11px] font-medium text-blue-300">
+                                                {xrayAnalysis.bass.style?.has_slides ? 'Slides' : xrayAnalysis.bass.style?.staccato_ratio > 0.5 ? 'Staccato' : 'Sustain'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Vocals */}
+                            {xrayAnalysis.vocals && xrayAnalysis.vocals.total_regions > 0 && (
+                                <div className="rounded-xl border border-violet-500/20 bg-gradient-to-br from-violet-950/30 to-zinc-950 p-4">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="text-sm font-bold text-violet-400">🎤 Vocals</span>
+                                        <Badge variant="outline" className="text-[10px] border-violet-500/30 text-violet-300">
+                                            {xrayAnalysis.vocals.total_regions} regions · {xrayAnalysis.vocals.total_duration}s
+                                        </Badge>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5 mb-2">
+                                        {xrayAnalysis.vocals.types && Object.entries(xrayAnalysis.vocals.types).map(([type, count]: [string, any]) => (
+                                            <div key={type} className="flex items-center gap-1 px-2 py-1 rounded-md bg-violet-500/10 border border-violet-500/20">
+                                                <span className="text-[11px] text-violet-300 font-medium">{type}</span>
+                                                <span className="text-[9px] text-violet-400/70 font-mono">{count}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {xrayAnalysis.vocals.effects_detected?.length > 0 && (
+                                        <div className="flex gap-1.5 mt-2">
+                                            {xrayAnalysis.vocals.effects_detected.map((fx: string, i: number) => (
+                                                <Badge key={i} className="bg-violet-500/15 text-violet-300 text-[9px] border-violet-500/20">
+                                                    ✨ {fx}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Other — Instruments + FX */}
+                            {xrayAnalysis.other && xrayAnalysis.other.total_elements > 0 && (
+                                <div className="rounded-xl border border-emerald-500/20 bg-gradient-to-br from-emerald-950/30 to-zinc-950 p-4">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="text-sm font-bold text-emerald-400">🎹 Instruments & FX</span>
+                                        <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-300">
+                                            {xrayAnalysis.other.total_elements} elements
+                                        </Badge>
+                                    </div>
+                                    {xrayAnalysis.other.instruments_detected?.length > 0 && (
+                                        <div className="mb-2">
+                                            <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1">Instruments</div>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {xrayAnalysis.other.instruments_detected.map((inst: string) => {
+                                                    const instIcons: Record<string, string> = {
+                                                        Pad: '🎛️', Lead: '🎹', Pluck: '🪕', Piano: '🎹',
+                                                        Guitar: '🎸', Strings: '🎻', Arp: '🔄', Synth: '🎛️',
+                                                    };
+                                                    const instCount = xrayAnalysis.other.types?.[inst] ?? 0;
+                                                    return (
+                                                        <div key={inst} className="flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20">
+                                                            <span className="text-xs">{instIcons[inst] || '🎵'}</span>
+                                                            <span className="text-[11px] text-emerald-300 font-medium">{inst}</span>
+                                                            <span className="text-[9px] text-emerald-400/60 font-mono">{instCount}</span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {xrayAnalysis.other.fx_detected?.length > 0 && (
+                                        <div>
+                                            <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1">Effects</div>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {xrayAnalysis.other.fx_detected.map((fx: string) => {
+                                                    const fxIcons: Record<string, string> = {
+                                                        Riser: '📈', Sweep: '🌊', Impact: '💥',
+                                                        'White Noise': '🌫️', Reverse: '⏪',
+                                                    };
+                                                    const fxCount = xrayAnalysis.other.types?.[fx] ?? 0;
+                                                    return (
+                                                        <div key={fx} className="flex items-center gap-1 px-2 py-1 rounded-md bg-orange-500/10 border border-orange-500/20">
+                                                            <span className="text-xs">{fxIcons[fx] || '✨'}</span>
+                                                            <span className="text-[11px] text-orange-300 font-medium">{fx}</span>
+                                                            <span className="text-[9px] text-orange-400/60 font-mono">{fxCount}</span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Vocal Effects Detail */}
+                        {xrayAnalysis.vocal_effects?.length > 0 && (
+                            <div className="rounded-lg border border-violet-500/10 bg-violet-500/5 p-3">
+                                <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-2">🎙️ Vocal Effects Detected</div>
+                                <div className="flex flex-wrap gap-2">
+                                    {xrayAnalysis.vocal_effects.map((eff: any, i: number) => (
+                                        <div key={i} className="text-[11px] text-violet-300 bg-violet-500/10 rounded-md px-2 py-1">
+                                            {eff.type === 'Reverb Tail' && `🔊 Reverb at ${eff.time}s (${eff.duration}s tail)`}
+                                            {eff.type === 'Delay/Echo' && `🔁 Delay: ${eff.delay_ms}ms (${Math.round(eff.strength * 100)}% strength)`}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
             )}
