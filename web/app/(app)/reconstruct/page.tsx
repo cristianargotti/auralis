@@ -419,64 +419,87 @@ export default function ReconstructPage() {
                 </div>
             </div>
 
-            {/* Phase 1: References (Context) */}
-            <div className="grid md:grid-cols-[1fr_200px] gap-4 items-end mb-6 border-b border-zinc-800 pb-6">
-                <Card className="bg-zinc-900/30 border-zinc-800/50">
-                    <CardHeader className="pb-3 pt-4">
-                        <CardTitle className="text-sm flex items-center gap-2 text-zinc-400">
-                            <span>🧬</span> Phase 1: DNA References
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="pb-4">
+            {/* ═══ WORKFLOW STEPS ═══ */}
+            <div className="space-y-4">
+                {/* STEP 1: References */}
+                <Card className="bg-zinc-900/30 border-zinc-800/50 overflow-hidden">
+                    <div className="flex items-center gap-3 px-5 pt-4 pb-2">
+                        <div className="w-7 h-7 rounded-full bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-xs font-bold text-cyan-400">
+                            1
+                        </div>
+                        <div>
+                            <h3 className="text-sm font-semibold text-zinc-300">DNA References</h3>
+                            <p className="text-[10px] text-zinc-600">The professional quality Auralis will target</p>
+                        </div>
+                    </div>
+                    <CardContent className="pb-4 pt-2">
                         {refLoading ? (
-                            <div className="h-8 w-full bg-zinc-800/50 rounded animate-pulse" />
+                            <div className="h-10 w-full bg-zinc-800/30 rounded-xl animate-pulse" />
                         ) : references.length === 0 ? (
-                            <div className="flex items-center justify-between bg-amber-500/10 text-amber-500 px-3 py-2 rounded-lg text-sm border border-amber-500/20">
-                                <span>⚠️ No references set. Auralis will guess the style.</span>
+                            <div className="flex items-center justify-between bg-amber-500/5 border border-amber-500/15 rounded-xl px-4 py-3">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center text-sm">⚠️</div>
+                                    <div>
+                                        <p className="text-sm text-amber-400 font-medium">No references loaded</p>
+                                        <p className="text-[10px] text-zinc-600">Auralis will guess the target style</p>
+                                    </div>
+                                </div>
                                 <Link href="/reference">
-                                    <Button variant="outline" size="sm" className="h-7 border-amber-500/30 text-amber-400 hover:bg-amber-500/20">
-                                        + Add Refs
+                                    <Button size="sm" className="h-8 bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 hover:border-amber-500/40 transition-all text-xs">
+                                        📤 Upload Refs
                                     </Button>
                                 </Link>
                             </div>
                         ) : (
-                            <div className="space-y-2">
-                                <div className="flex items-center justify-between">
-                                    <div className="text-sm text-zinc-300">
-                                        <span className="text-emerald-400 font-bold">{references.length} active references</span> loaded.
-                                        Targeting average <span className="font-mono text-cyan-400">
-                                            {Math.round(references.reduce((a, b) => a + b.bpm, 0) / references.length)} BPM
-                                        </span>.
+                            <div className="rounded-xl bg-emerald-500/5 border border-emerald-500/10 px-4 py-3">
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                        <span className="text-sm text-emerald-400 font-semibold">{references.length} references active</span>
+                                        <span className="text-xs text-zinc-500">•</span>
+                                        <span className="text-xs text-zinc-500 font-mono">
+                                            ~{Math.round(references.reduce((a, b) => a + b.bpm, 0) / references.length)} BPM
+                                        </span>
                                     </div>
                                     <Link href="/reference">
-                                        <Button variant="ghost" size="sm" className="h-6 text-xs text-zinc-500 hover:text-zinc-300">
-                                            Manage
+                                        <Button variant="ghost" size="sm" className="h-6 text-[10px] text-zinc-600 hover:text-zinc-300">
+                                            Manage →
                                         </Button>
                                     </Link>
                                 </div>
-                                <div className="flex gap-2 overflow-x-auto pb-1">
+                                <div className="flex gap-1.5 overflow-x-auto">
                                     {references.slice(0, 5).map(ref => (
-                                        <Badge key={ref.track_id} variant="outline" className="text-[10px] border-zinc-700 text-zinc-500 bg-zinc-900/50 whitespace-nowrap">
-                                            {ref.name}
+                                        <Badge key={ref.track_id} variant="outline" className="text-[9px] border-zinc-700/50 text-zinc-500 bg-zinc-900/50 whitespace-nowrap px-2 py-0.5">
+                                            🎵 {ref.name}
                                         </Badge>
                                     ))}
                                     {references.length > 5 && (
-                                        <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500">+{references.length - 5}</Badge>
+                                        <Badge variant="outline" className="text-[9px] border-zinc-700/50 text-zinc-500 px-2">
+                                            +{references.length - 5}
+                                        </Badge>
                                     )}
                                 </div>
                             </div>
                         )}
                     </CardContent>
                 </Card>
-                <div className="hidden md:block pb-2 text-center opacity-50">
-                    <div className="text-2xl mb-1">⬇️</div>
-                    <div className="text-xs text-zinc-500 font-medium uppercase tracking-wider">then</div>
+
+                {/* Connector */}
+                <div className="flex items-center justify-center gap-2 py-1">
+                    <div className="w-px h-4 bg-gradient-to-b from-cyan-500/20 to-amber-500/20" />
+                </div>
+
+                {/* STEP 2: Target Track */}
+                <div className="flex items-center gap-3 px-1 pb-1">
+                    <div className="w-7 h-7 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-xs font-bold text-amber-400">
+                        2
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-semibold text-zinc-300">Upload Target Track</h3>
+                        <p className="text-[10px] text-zinc-600">The track you want to level up</p>
+                    </div>
                 </div>
             </div>
-
-            <h3 className="text-sm font-medium text-zinc-400 mb-2 flex items-center gap-2">
-                <span>🎯</span> Phase 2: Upload Target Track
-            </h3>
 
             {/* Upload + Start */}
             <Card className="bg-zinc-900/50 border-zinc-800">
