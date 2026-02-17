@@ -19,8 +19,8 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from auralis.api.auth import get_current_user_or_token
@@ -358,9 +358,10 @@ async def get_waveform_data(job_id: str) -> dict[str, Any]:
 async def get_audio_file(
     job_id: str,
     file_key: str,
+    request: Request,
     _user=Depends(get_current_user_or_token),
 ):
-    """Stream audio file (original, mix, stem_*)."""
+    """Stream audio file with HTTP Range support for instant playback."""
     if job_id not in _reconstruct_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -384,8 +385,47 @@ async def get_audio_file(
     file_path = project_dir / file_map[file_key]
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
-        
-    return FileResponse(file_path, media_type="audio/wav")
+
+    file_size = file_path.stat().st_size
+    range_header = request.headers.get("range")
+
+    if range_header:
+        # Parse Range: bytes=start-end
+        range_spec = range_header.replace("bytes=", "")
+        parts = range_spec.split("-")
+        start = int(parts[0]) if parts[0] else 0
+        end = int(parts[1]) if parts[1] else file_size - 1
+        end = min(end, file_size - 1)
+        content_length = end - start + 1
+
+        def iter_range():
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = f.read(min(8192, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            iter_range(),
+            status_code=206,
+            media_type="audio/wav",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+            },
+        )
+
+    # No Range header — full file with Accept-Ranges hint
+    return FileResponse(
+        file_path,
+        media_type="audio/wav",
+        headers={"Accept-Ranges": "bytes"},
+    )
 
 
 @media_router.get("/spectrogram/{job_id}/{file_key}")
