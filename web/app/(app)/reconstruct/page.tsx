@@ -1780,28 +1780,79 @@ export default function ReconstructPage() {
                                 </div>
                             </CardHeader>
                             <CardContent className="space-y-4">
-                                {/* Overall Grade */}
                                 {(() => {
                                     const score = job.result?.qc?.overall_score ?? 0;
                                     const gap = job.result?.auto_correction?.total_gap;
                                     const passed = job.result?.qc?.passed;
                                     const passes = job.result?.auto_correction?.pass_number ?? 1;
                                     const reprocessed = job.result?.auto_correction?.should_reprocess;
+                                    const dims = job.result?.qc?.dimensions;
+                                    const weakest = job.result?.qc?.weakest;
+                                    const strongest = job.result?.qc?.strongest;
 
-                                    let grade: string, gradeColor: string, gradeIcon: string, gradeText: string;
+                                    let grade: string, gradeColor: string, gradeIcon: string;
                                     if (score >= 90) {
                                         grade = 'EXCELLENT'; gradeColor = 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10';
-                                        gradeIcon = '💎'; gradeText = 'Professional quality — ready for distribution. The AI matched the reference DNA with high fidelity across all 12 dimensions.';
+                                        gradeIcon = '💎';
                                     } else if (score >= 75) {
                                         grade = 'GOOD'; gradeColor = 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10';
-                                        gradeIcon = '✅'; gradeText = 'Solid reconstruction with room for polish. Core elements are accurately captured. Fine details may differ from reference.';
+                                        gradeIcon = '✅';
                                     } else if (score >= 55) {
                                         grade = 'NEEDS WORK'; gradeColor = 'text-amber-400 border-amber-500/30 bg-amber-500/10';
-                                        gradeIcon = '⚠️'; gradeText = 'Partial match — the foundation is there but some dimensions deviate significantly from the reference DNA.';
+                                        gradeIcon = '⚠️';
                                     } else {
                                         grade = 'CRITICAL GAP'; gradeColor = 'text-red-400 border-red-500/30 bg-red-500/10';
-                                        gradeIcon = '🚨'; gradeText = 'Major divergence from reference. The reconstruction needs fundamental rework in multiple areas.';
+                                        gradeIcon = '🚨';
                                     }
+
+                                    // Build dynamic commentary from actual QC data
+                                    const commentary: string[] = [];
+                                    if (dims) {
+                                        const getScore = (d: string) => {
+                                            const v = dims[d];
+                                            return typeof v === 'object' ? (v as any).score : (v || 0);
+                                        };
+
+                                        // Analyze strongest point
+                                        if (strongest) {
+                                            const sScore = getScore(strongest);
+                                            if (sScore >= 90) commentary.push(`${strongest.replace(/_/g, ' ')} is nailed at ${sScore.toFixed(0)}% — that element is production-ready.`);
+                                            else if (sScore >= 75) commentary.push(`Best dimension is ${strongest.replace(/_/g, ' ')} (${sScore.toFixed(0)}%) — solid foundation.`);
+                                        }
+
+                                        // Analyze weakest point with specific advice
+                                        if (weakest) {
+                                            const wScore = getScore(weakest);
+                                            const dimAdvice: Record<string, string> = {
+                                                loudness: 'LUFS/RMS levels diverge from reference — mastering chain needs adjustment.',
+                                                spectral_balance: 'Frequency balance differs — check EQ curve against reference.',
+                                                stereo_width: 'Stereo image doesn\'t match — mid/side processing needs tuning.',
+                                                dynamics: 'Dynamic range is off — compression/transient response needs work.',
+                                                low_end: 'Sub/bass region diverges — low-end needs rebalancing.',
+                                                high_end: 'High frequencies differ — check brightness and air.',
+                                                mid_range: 'Mid-range character differs from reference.',
+                                                transients: 'Transient attack/sustain doesn\'t match reference groove.',
+                                                harmonic_content: 'Harmonic richness differs — saturation/distortion needs adjustment.',
+                                                noise_floor: 'Noise floor is different from reference.',
+                                                phase_coherence: 'Phase alignment issues detected between stems.',
+                                                crest_factor: 'Peak-to-average ratio diverges — dynamic punch differs.',
+                                            };
+                                            const advice = dimAdvice[weakest] || `${weakest.replace(/_/g, ' ')} scored lowest.`;
+                                            if (wScore < 50) commentary.push(`⚠️ Critical: ${advice} (${wScore.toFixed(0)}%)`);
+                                            else commentary.push(`Weakest area: ${advice} (${wScore.toFixed(0)}%)`);
+                                        }
+
+                                        // Count dimensions by tier
+                                        const allScores = QC_DIMENSIONS.map(d => ({ dim: d, score: getScore(d) }));
+                                        const excellent = allScores.filter(d => d.score >= 90).length;
+                                        const failing = allScores.filter(d => d.score < 60 && d.score > 0).length;
+
+                                        if (excellent > 0) commentary.push(`${excellent}/${allScores.length} dimensions above 90%.`);
+                                        if (failing > 0) commentary.push(`${failing} dimension${failing > 1 ? 's' : ''} below 60% — need${failing > 1 ? '' : 's'} attention.`);
+                                    }
+
+                                    if (reprocessed) commentary.push('AI detected issues and self-corrected on pass 2.');
+                                    if (!dims) commentary.push(score >= 75 ? 'Solid reconstruction — core elements captured.' : 'Reconstruction has room for improvement.');
 
                                     return (
                                         <div className={`rounded-xl border p-4 ${gradeColor}`}>
@@ -1823,7 +1874,13 @@ export default function ReconstructPage() {
                                                     </div>
                                                 )}
                                             </div>
-                                            <p className="text-[11px] leading-relaxed opacity-80">{gradeText}</p>
+                                            <div className="space-y-1">
+                                                {commentary.map((line, i) => (
+                                                    <p key={i} className="text-[11px] leading-relaxed opacity-80">
+                                                        {i === 0 ? '' : '→ '}{line}
+                                                    </p>
+                                                ))}
+                                            </div>
                                         </div>
                                     );
                                 })()}
