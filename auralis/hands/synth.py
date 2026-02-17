@@ -309,6 +309,7 @@ def render_midi_to_audio(
 
 
 PRESETS: dict[str, SynthPatch] = {
+    # ── Bass Family (weight, depth, groove) ──
     "supersaw": SynthPatch(
         name="Super Saw",
         description="Classic detuned saw stack — EDM leads and pads",
@@ -322,25 +323,70 @@ PRESETS: dict[str, SynthPatch] = {
     ),
     "bass_808": SynthPatch(
         name="808 Bass",
-        description="Deep sub bass — sine with pitch envelope",
+        description="Deep sub weight — the gravitational pull of the track",
         voice=VoiceConfig(
             oscillators=[OscConfig(wave="sine", level=0.9), OscConfig(wave="triangle", level=0.3)],
             envelope=ADSREnvelope(attack_s=0.005, decay_s=0.8, sustain=0.2, release_s=0.3),
             filter=FilterConfig(type="lowpass", cutoff_hz=200, resonance=0.8),
         ),
     ),
+    "bass_reese": SynthPatch(
+        name="Reese Bass",
+        description="Dark, evolving detuned bass — tension and movement underneath",
+        voice=VoiceConfig(
+            oscillators=[
+                OscConfig(wave="saw", level=0.7),
+                OscConfig(wave="saw", detune_cents=12, level=0.7),
+            ],
+            envelope=ADSREnvelope(attack_s=0.01, decay_s=0.4, sustain=0.5, release_s=0.4),
+            filter=FilterConfig(type="lowpass", cutoff_hz=600, resonance=0.6),
+        ),
+    ),
+    "acid_303": SynthPatch(
+        name="Acid 303",
+        description="Resonant character — squelchy energy that drives the groove",
+        voice=VoiceConfig(
+            oscillators=[OscConfig(wave="saw")],
+            envelope=ADSREnvelope(attack_s=0.001, decay_s=0.3, sustain=0.1, release_s=0.1),
+            filter=FilterConfig(type="lowpass", cutoff_hz=1500, resonance=0.9),
+        ),
+    ),
+    # ── Melodic Family (story, emotion, melody) ──
     "pluck": SynthPatch(
         name="Pluck",
-        description="Short percussive pluck — melodic elements",
+        description="Instant melodic statement — carries the hook and identity",
         voice=VoiceConfig(
             oscillators=[OscConfig(wave="saw"), OscConfig(wave="square", detune_cents=7, level=0.4)],
             envelope=ADSREnvelope(attack_s=0.002, decay_s=0.15, sustain=0.0, release_s=0.1),
             filter=FilterConfig(type="lowpass", cutoff_hz=4000, resonance=0.6),
         ),
     ),
+    "keys_electric": SynthPatch(
+        name="Electric Keys",
+        description="Warm harmonic richness — soul and human touch in the arrangement",
+        voice=VoiceConfig(
+            oscillators=[
+                OscConfig(wave="sine", level=0.6),
+                OscConfig(wave="triangle", detune_cents=3, level=0.4),
+                OscConfig(wave="square", detune_cents=-5, level=0.15),
+            ],
+            envelope=ADSREnvelope(attack_s=0.003, decay_s=0.4, sustain=0.3, release_s=0.2),
+            filter=FilterConfig(type="lowpass", cutoff_hz=5000, resonance=0.4),
+        ),
+    ),
+    "bell_fm": SynthPatch(
+        name="FM Bell",
+        description="Crystalline, bell-like — adds spark and air to the high end",
+        voice=VoiceConfig(
+            oscillators=[OscConfig(wave="sine", level=0.8)],
+            envelope=ADSREnvelope(attack_s=0.001, decay_s=0.5, sustain=0.0, release_s=0.8),
+            filter=FilterConfig(type="lowpass", cutoff_hz=12000, resonance=0.3),
+        ),
+    ),
+    # ── Atmosphere Family (space, story, world-building) ──
     "pad_warm": SynthPatch(
         name="Warm Pad",
-        description="Slow attack warm pad — ambient textures",
+        description="Slow-breathing warmth — the emotional foundation of the track",
         voice=VoiceConfig(
             oscillators=[
                 OscConfig(wave="saw", level=0.5),
@@ -352,16 +398,92 @@ PRESETS: dict[str, SynthPatch] = {
             unison_spread_cents=8.0,
         ),
     ),
-    "acid_303": SynthPatch(
-        name="Acid 303",
-        description="Resonant saw — acid bass lines",
+    "pad_dark": SynthPatch(
+        name="Dark Pad",
+        description="Low, haunting texture — tension and mystery in the background",
         voice=VoiceConfig(
-            oscillators=[OscConfig(wave="saw")],
-            envelope=ADSREnvelope(attack_s=0.001, decay_s=0.3, sustain=0.1, release_s=0.1),
-            filter=FilterConfig(type="lowpass", cutoff_hz=1500, resonance=0.9),
+            oscillators=[
+                OscConfig(wave="square", level=0.4),
+                OscConfig(wave="saw", detune_cents=8, level=0.3),
+                OscConfig(wave="triangle", detune_cents=-3, level=0.3),
+            ],
+            envelope=ADSREnvelope(attack_s=2.0, decay_s=1.0, sustain=0.7, release_s=3.0),
+            filter=FilterConfig(type="lowpass", cutoff_hz=1500, resonance=0.4),
+            unison=3,
+            unison_spread_cents=12.0,
+        ),
+    ),
+    "texture_noise": SynthPatch(
+        name="Noise Texture",
+        description="Filtered breath — air and organic life in the space between notes",
+        voice=VoiceConfig(
+            oscillators=[OscConfig(wave="noise", level=0.6)],
+            envelope=ADSREnvelope(attack_s=0.5, decay_s=0.3, sustain=0.4, release_s=1.5),
+            filter=FilterConfig(type="bandpass", cutoff_hz=2000, resonance=0.5),
         ),
     ),
 }
+
+
+def get_patch_for_stem(
+    stem_name: str,
+    style: str = "",
+    bpm: float = 120.0,
+    synth_patch: str = "",
+) -> SynthPatch:
+    """Musically-intelligent patch selection based on stem context.
+
+    Thinks in terms of *what the music needs* — not just technical
+    parameters.  The bass needs weight; pads need breath; leads need
+    identity; textures need life.
+
+    Args:
+        stem_name: drums | bass | vocals | other
+        style: Musical style hint from brain (e.g. "deep house bass")
+        bpm: Track BPM — faster tracks need tighter sounds
+        synth_patch: Explicit patch name override
+    """
+    # Explicit override always wins
+    if synth_patch and synth_patch in PRESETS:
+        return PRESETS[synth_patch]
+
+    style_lower = style.lower() if style else ""
+
+    if stem_name == "bass":
+        # Bass = the gravitational center
+        if "acid" in style_lower or "303" in style_lower:
+            return PRESETS["acid_303"]
+        if "reese" in style_lower or "dnb" in style_lower or bpm > 150:
+            return PRESETS["bass_reese"]
+        if "sub" in style_lower or "808" in style_lower or bpm < 100:
+            return PRESETS["bass_808"]
+        # Default: 808 for slow grooves, reese for energy
+        return PRESETS["bass_808"] if bpm < 130 else PRESETS["bass_reese"]
+
+    elif stem_name == "other":
+        # Other = the color palette of the track
+        if "pad" in style_lower or "ambient" in style_lower:
+            if "dark" in style_lower or bpm > 140:
+                return PRESETS["pad_dark"]
+            return PRESETS["pad_warm"]
+        if "bell" in style_lower or "chime" in style_lower:
+            return PRESETS["bell_fm"]
+        if "key" in style_lower or "piano" in style_lower:
+            return PRESETS["keys_electric"]
+        if "lead" in style_lower or "melody" in style_lower:
+            return PRESETS["pluck"]
+        if "texture" in style_lower or "atmosphere" in style_lower:
+            return PRESETS["texture_noise"]
+        # Default: pad for slow, pluck for fast
+        return PRESETS["pad_warm"] if bpm < 120 else PRESETS["pluck"]
+
+    elif stem_name == "vocals":
+        # Vocal textures = ethereal, atmospheric
+        return PRESETS["pad_warm"]
+
+    else:
+        # Fallback
+        return PRESETS["pluck"]
 
 
 def save_audio(

@@ -610,9 +610,9 @@ def _subprocess_mix(
     import soundfile as sf
     import numpy as np
     from types import SimpleNamespace
-    from auralis.hands.mixer import Mixer, MixConfig
+    from auralis.hands.mixer import Mixer, MixConfig, SendConfig
     from auralis.hands.effects import (
-        EffectChain, ReverbConfig, DelayConfig,
+        EffectChain, ReverbConfig, DelayConfig, CompressorConfig,
     )
     from auralis.console.stem_recipes import build_recipe_for_stem, StemRecipe, enhance_recipe_with_smart_fx
 
@@ -671,7 +671,19 @@ def _subprocess_mix(
         ),
         volume_db=brain_del_vol,
     )
-    print(f"  Buses: Reverb (room {brain_room}, damp 0.5) | Delay ({delay_time:.0f}ms, fb {brain_fb})")
+    # Drum bus: parallel compression for punch
+    mixer.add_bus(
+        "drum_bus",
+        effects=EffectChain(
+            name="drum_parallel",
+            compressor=CompressorConfig(
+                threshold_db=-20.0, ratio=6.0, attack_ms=5.0,
+                release_ms=50.0, makeup_db=6.0
+            ),
+        ),
+        volume_db=-6.0,
+    )
+    print(f"  Buses: Reverb (room {brain_room}, damp 0.5) | Delay ({delay_time:.0f}ms, fb {brain_fb}) | Drum Parallel Comp")
 
     # ── Build recipes and add tracks ──
     recipes_used: list[str] = []
@@ -698,6 +710,12 @@ def _subprocess_mix(
             stem_plan=stem_plan,
         )
 
+        # Auto-send drums to parallel compression bus
+        sends = list(recipe.sends) if recipe.sends else []
+        base_name = name.replace("gen_", "").replace("layer_", "")
+        if base_name == "drums" and not any(s.bus_name == "drum_bus" for s in sends):
+            sends.append(SendConfig(bus_name="drum_bus", amount=0.4))
+
         # Add track to mixer with recipe settings
         mixer.add_track(
             name=name,
@@ -705,7 +723,7 @@ def _subprocess_mix(
             volume_db=recipe.volume_db,
             pan=recipe.pan,
             effects=recipe.chain,
-            sends=recipe.sends,
+            sends=sends,
         )
 
         recipes_used.append(recipe.description)
@@ -1414,6 +1432,11 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                                 deep_profile = bank.get_deep_profile() if bank else {}
 
                                 if deep_profile:
+                                    # Build stem paths dict for per-stem evaluation
+                                    stem_paths_for_ac = {
+                                        k: str(v) for k, v in rendered_stems.items()
+                                        if not k.startswith("_")
+                                    }
                                     correction = await asyncio.to_thread(
                                         evaluate_and_correct,
                                         master_path=str(master_path),
@@ -1421,10 +1444,19 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                                         pass_number=1,
                                         max_passes=2,
                                         threshold=0.15,
+                                        stem_paths=stem_paths_for_ac,
+                                        ref_targets=ref_targets if ref_targets else None,
                                     )
 
                                     job["result"]["auto_correction"] = correction.to_dict()
                                     _log(job, f"🔄 Auto-correction: gap={correction.total_gap:.0%}, pass={correction.pass_number}")
+
+                                    # Log per-stem corrections
+                                    for sname, sc in correction.stem_corrections.items():
+                                        if sc.needs_correction:
+                                            _log(job, f"  🎚️ {sname}: gap={sc.gap_score:.0%}")
+                                            for reason in sc.reasoning[:3]:
+                                                _log(job, f"    {reason}")
 
                                     if correction.master_correction:
                                         for reason in correction.master_correction.reasoning:
@@ -1445,10 +1477,16 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                                             # Apply EQ corrections (append to existing mid bands)
                                             if "eq_adjust" in mc.corrections:
                                                 existing = list(corrected_plan.get("mid_eq_bands", []))
-                                                existing.extend(mc.corrections["eq_adjust"])
+                                                for eq_fix in mc.corrections["eq_adjust"]:
+                                                    if isinstance(eq_fix, dict):
+                                                        freq = eq_fix.get("freq", 1000)
+                                                        gain = eq_fix.get("gain_db", 0)
+                                                        q = eq_fix.get("q", 1.0)
+                                                        existing.append((freq, gain, q))
+                                                        _log(job, f"  → EQ fix: {gain:+.1f}dB @{freq:.0f}Hz")
+                                                    else:
+                                                        existing.append(eq_fix)
                                                 corrected_plan["mid_eq_bands"] = existing
-                                                for f, g, q in mc.corrections["eq_adjust"]:
-                                                    _log(job, f"  → EQ fix: {g:+.1f}dB @{f:.0f}Hz")
 
                                         await asyncio.to_thread(
                                             _run_in_subprocess,
