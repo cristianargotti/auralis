@@ -981,8 +981,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     _log(job, f"✓ Mixed {mix_result['tracks_mixed']} tracks (subprocess)", "success")
                 except Exception as e:
                     _log(job, f"Mixer subprocess failed ({e}) — falling back to simple sum", "warning")
-                    # Fallback: quick sum mix
-                    import soundfile as sf
+                    # Fallback: quick sum mix (sf already imported at module level)
                     all_audio = []
                     sr = 44100
                     for path in rendered_stems.values():
