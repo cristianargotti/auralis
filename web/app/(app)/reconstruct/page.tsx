@@ -592,7 +592,7 @@ export default function ReconstructPage() {
                         {job.status === "completed" && job.result && (
                             <div className="mt-4 p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                                 <p className="text-emerald-400 font-semibold text-center">
-                                    ✅ Reconstruction complete — {job.result.rendered_stems} stems rendered
+                                    ✅ Reconstruction complete — {job.result.rendered_stems ?? 0} stems rendered
                                     {elapsed > 0 && (
                                         <span className="text-emerald-500/60 font-normal ml-2">in {formatElapsed(elapsed)}</span>
                                     )}
@@ -600,7 +600,7 @@ export default function ReconstructPage() {
                                 {job.result.analysis && (
                                     <div className="flex flex-wrap gap-3 justify-center mt-3">
                                         <Badge variant="outline" className="border-amber-500/30 text-amber-400">
-                                            {job.result.analysis.bpm.toFixed(1)} BPM
+                                            {(job.result.analysis.bpm ?? 0).toFixed(1)} BPM
                                         </Badge>
                                         <Badge variant="outline" className="border-emerald-500/30 text-emerald-400">
                                             {job.result.analysis.key} {job.result.analysis.scale}
@@ -613,7 +613,7 @@ export default function ReconstructPage() {
                                         </Badge>
                                         {job.result.master?.est_lufs && (
                                             <Badge variant="outline" className="border-orange-500/30 text-orange-400">
-                                                Master: {job.result.master.est_lufs.toFixed(1)} LUFS
+                                                Master: {(job.result.master.est_lufs ?? 0).toFixed(1)} LUFS
                                             </Badge>
                                         )}
                                         {job.result.qc && (
@@ -621,7 +621,7 @@ export default function ReconstructPage() {
                                                 ? "border-emerald-500/30 text-emerald-400"
                                                 : "border-amber-500/30 text-amber-400"
                                                 }`}>
-                                                QC: {job.result.qc.overall_score.toFixed(1)}%
+                                                QC: {(job.result.qc.overall_score ?? 0).toFixed(1)}%
                                             </Badge>
                                         )}
                                     </div>
@@ -710,7 +710,7 @@ export default function ReconstructPage() {
                         {Object.entries(job.result.stem_analysis).map(([name, data], idx) => {
                             if (data.error) return null;
                             const config = getStemConfig(name);
-                            const energyClamped = Math.min(data.energy_pct, 100);
+                            const energyClamped = Math.min(data.energy_pct ?? 0, 100);
                             return (
                                 <div
                                     key={name}
@@ -734,7 +734,7 @@ export default function ReconstructPage() {
                                             </div>
                                             <div>
                                                 <div className="font-bold text-sm capitalize text-zinc-100">{name}</div>
-                                                <div className="text-[10px] text-zinc-500 font-mono">{data.file_size_mb} MB</div>
+                                                <div className="text-[10px] text-zinc-500 font-mono">{data.file_size_mb ?? '?'} MB</div>
                                             </div>
                                         </div>
 
@@ -742,7 +742,7 @@ export default function ReconstructPage() {
                                         <div className="flex-1">
                                             <div className="flex items-center justify-between mb-1">
                                                 <span className="text-[10px] text-zinc-500">Energy contribution</span>
-                                                <span className={`text-xs font-bold font-mono ${config.textColor}`}>{data.energy_pct}%</span>
+                                                <span className={`text-xs font-bold font-mono ${config.textColor}`}>{data.energy_pct ?? 0}%</span>
                                             </div>
                                             <div className="w-full h-3 bg-zinc-800/80 rounded-full overflow-hidden">
                                                 <div
@@ -756,11 +756,11 @@ export default function ReconstructPage() {
                                         <div className="flex gap-4 min-w-[120px]">
                                             <div className="text-center">
                                                 <div className="text-[9px] text-zinc-600 uppercase tracking-wider">RMS</div>
-                                                <div className={`text-sm font-mono font-bold ${config.textColor}`}>{data.rms_db} dB</div>
+                                                <div className={`text-sm font-mono font-bold ${config.textColor}`}>{data.rms_db ?? '–'} dB</div>
                                             </div>
                                             <div className="text-center">
                                                 <div className="text-[9px] text-zinc-600 uppercase tracking-wider">Peak</div>
-                                                <div className="text-sm font-mono font-bold text-zinc-300">{data.peak_db} dBFS</div>
+                                                <div className="text-sm font-mono font-bold text-zinc-300">{data.peak_db ?? '–'} dBFS</div>
                                             </div>
                                         </div>
 
@@ -770,18 +770,18 @@ export default function ReconstructPage() {
                                             <div className="flex gap-0.5 items-end h-6 justify-center">
                                                 <div
                                                     className="w-5 rounded-t bg-gradient-to-t from-blue-600 to-blue-400 transition-all duration-700"
-                                                    style={{ height: `${Math.max(data.freq_bands.low * 0.24, 2)}px` }}
-                                                    title={`Low: ${data.freq_bands.low}%`}
+                                                    style={{ height: `${Math.max((data.freq_bands?.low ?? 0) * 0.24, 2)}px` }}
+                                                    title={`Low: ${data.freq_bands?.low ?? 0}%`}
                                                 />
                                                 <div
                                                     className="w-5 rounded-t bg-gradient-to-t from-emerald-600 to-emerald-400 transition-all duration-700"
-                                                    style={{ height: `${Math.max(data.freq_bands.mid * 0.24, 2)}px` }}
-                                                    title={`Mid: ${data.freq_bands.mid}%`}
+                                                    style={{ height: `${Math.max((data.freq_bands?.mid ?? 0) * 0.24, 2)}px` }}
+                                                    title={`Mid: ${data.freq_bands?.mid ?? 0}%`}
                                                 />
                                                 <div
                                                     className="w-5 rounded-t bg-gradient-to-t from-amber-600 to-amber-400 transition-all duration-700"
-                                                    style={{ height: `${Math.max(data.freq_bands.high * 0.24, 2)}px` }}
-                                                    title={`High: ${data.freq_bands.high}%`}
+                                                    style={{ height: `${Math.max((data.freq_bands?.high ?? 0) * 0.24, 2)}px` }}
+                                                    title={`High: ${data.freq_bands?.high ?? 0}%`}
                                                 />
                                             </div>
                                             <div className="flex gap-0.5 justify-center mt-0.5">
@@ -938,7 +938,7 @@ export default function ReconstructPage() {
                                         <div className={`text-2xl font-bold ${job.result.qc.passed ? "text-emerald-400" :
                                             job.result.qc.overall_score >= 70 ? "text-amber-400" : "text-red-400"
                                             }`}>
-                                            {job.result.qc.overall_score.toFixed(1)}%
+                                            {(job.result.qc.overall_score ?? 0).toFixed(1)}%
                                         </div>
                                         <Badge variant="outline" className={`text-[10px] ${job.result.qc.passed
                                             ? "border-emerald-500/30 text-emerald-400"
@@ -980,7 +980,7 @@ export default function ReconstructPage() {
                                                         score >= 70 ? "text-amber-400" :
                                                             score > 0 ? "text-red-400" : "text-zinc-600"
                                                         }`}>
-                                                        {score.toFixed(1)}%
+                                                        {(score ?? 0).toFixed(1)}%
                                                     </span>
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">

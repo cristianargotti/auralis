@@ -1,10 +1,50 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import WaveSurfer from 'wavesurfer.js';
-import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
-import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
+import { useEffect, useRef, useState, Component, ReactNode } from 'react';
+import type WaveSurferType from 'wavesurfer.js';
 import { api } from '@/lib/api';
+
+/* ── Error Boundary ─────────────────────────────────── */
+
+interface ErrorBoundaryProps {
+    children: ReactNode;
+    fallback?: ReactNode;
+}
+
+interface ErrorBoundaryState {
+    hasError: boolean;
+    error?: Error;
+}
+
+class WaveformErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+    constructor(props: ErrorBoundaryProps) {
+        super(props);
+        this.state = { hasError: false };
+    }
+
+    static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+        return { hasError: true, error };
+    }
+
+    componentDidCatch(error: Error, info: React.ErrorInfo) {
+        console.error('[WaveformXRay] Error boundary caught:', error, info);
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return this.props.fallback || (
+                <div className="p-4 text-center text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                    <span className="text-xl">⚠️</span>
+                    <p className="text-sm mt-1">Waveform visualization encountered an error.</p>
+                    <p className="text-xs text-zinc-500 mt-1">{this.state.error?.message}</p>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+/* ── Types ───────────────────────────────────────────── */
 
 interface WaveformXRayProps {
     jobId: string;
@@ -30,12 +70,15 @@ interface WaveformData {
     layers: Layer[];
 }
 
-export default function WaveformXRay({ jobId }: WaveformXRayProps) {
+/* ── Inner Component (wrapped by Error Boundary) ───── */
+
+function WaveformXRayInner({ jobId }: WaveformXRayProps) {
     const containerRef = useRef<HTMLDivElement>(null);
-    const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
+    const [wavesurfer, setWavesurfer] = useState<WaveSurferType | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [data, setData] = useState<WaveformData | null>(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [zoom, setZoom] = useState(10);
     const [audioSource, setAudioSource] = useState<'original' | 'mix'>('original');
     const regionsRef = useRef<any>(null);
@@ -44,11 +87,29 @@ export default function WaveformXRay({ jobId }: WaveformXRayProps) {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                // Use api helper for authenticated fetch
+                setError(null);
                 const json = await api<WaveformData>(`/api/reconstruct/waveform/${jobId}`);
+
+                // Validate critical fields
+                if (!json || typeof json.duration !== 'number') {
+                    setError('Invalid waveform data received');
+                    return;
+                }
+
+                // Ensure waveform is a non-empty numeric array
+                if (!Array.isArray(json.waveform) || json.waveform.length === 0) {
+                    json.waveform = new Array(200).fill(0);
+                }
+
+                // Ensure layers is an array
+                if (!Array.isArray(json.layers)) {
+                    json.layers = [];
+                }
+
                 setData(json);
-            } catch (e) {
-                console.error("Failed to fetch waveform data", e);
+            } catch (e: any) {
+                console.error("[WaveformXRay] Failed to fetch waveform data:", e);
+                setError(e?.message || 'Failed to load waveform data');
             } finally {
                 setLoading(false);
             }
@@ -60,105 +121,159 @@ export default function WaveformXRay({ jobId }: WaveformXRayProps) {
     useEffect(() => {
         if (!containerRef.current || !data) return;
 
-        // Retrieve token for authenticated audio streaming
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auralis_token') : null;
-        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+        let ws: WaveSurferType | null = null;
 
-        const ws = WaveSurfer.create({
-            container: containerRef.current,
-            waveColor: '#4f46e5', // Indigo-600
-            progressColor: '#818cf8', // Indigo-400
-            cursorColor: '#c7d2fe', // Indigo-200
-            barWidth: 2,
-            barGap: 1,
-            barRadius: 2,
-            height: 128,
-            normalize: true,
-            minPxPerSec: zoom,
-            url: `${process.env.NEXT_PUBLIC_API_URL || ''}/api/reconstruct/audio/${jobId}/${audioSource}`,
-            fetchParams: {
-                headers: authHeaders as HeadersInit
-            },
-            peaks: [data.waveform], // Use pre-computed peaks for instant render
-        });
+        const initWaveSurfer = async () => {
+            try {
+                // Dynamic imports to avoid SSR issues
+                const WaveSurfer = (await import('wavesurfer.js')).default;
+                const RegionsPlugin = (await import('wavesurfer.js/dist/plugins/regions.esm.js')).default;
+                const TimelinePlugin = (await import('wavesurfer.js/dist/plugins/timeline.esm.js')).default;
 
-        // Plugins
-        const wsRegions = ws.registerPlugin(RegionsPlugin.create());
-        regionsRef.current = wsRegions;
+                if (!containerRef.current) return; // Guard against unmount during async
 
-        ws.registerPlugin(TimelinePlugin.create({
-            container: '#waveform-timeline',
-            primaryLabelInterval: 10,
-            secondaryLabelInterval: 1,
-            style: {
-                fontSize: '10px',
-                color: '#6b7280',
-            },
-        }));
+                const token = typeof window !== 'undefined' ? localStorage.getItem('auralis_token') : null;
+                const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
 
-        // Event Listeners
-        ws.on('play', () => setIsPlaying(true));
-        ws.on('pause', () => setIsPlaying(false));
-        ws.on('finish', () => setIsPlaying(false));
+                // Ensure peaks data is valid (at least one non-zero value or a dummy array)
+                const safePeaks = data.waveform.length > 0 ? data.waveform : new Array(200).fill(0);
 
-        setWavesurfer(ws);
+                ws = WaveSurfer.create({
+                    container: containerRef.current,
+                    waveColor: '#4f46e5',
+                    progressColor: '#818cf8',
+                    cursorColor: '#c7d2fe',
+                    barWidth: 2,
+                    barGap: 1,
+                    barRadius: 2,
+                    height: 128,
+                    normalize: true,
+                    minPxPerSec: zoom,
+                    url: `${process.env.NEXT_PUBLIC_API_URL || ''}/api/reconstruct/audio/${jobId}/${audioSource}`,
+                    fetchParams: {
+                        headers: authHeaders as HeadersInit
+                    },
+                    peaks: [safePeaks],
+                });
+
+                // Plugins
+                const wsRegions = ws.registerPlugin(RegionsPlugin.create());
+                regionsRef.current = wsRegions;
+
+                ws.registerPlugin(TimelinePlugin.create({
+                    container: '#waveform-timeline',
+                    primaryLabelInterval: 10,
+                    secondaryLabelInterval: 1,
+                    style: {
+                        fontSize: '10px',
+                        color: '#6b7280',
+                    },
+                }));
+
+                // Error handler — catch audio load failures gracefully
+                ws.on('error', (err) => {
+                    console.warn('[WaveformXRay] WaveSurfer error (non-fatal):', err);
+                    // Don't crash — just disable playback
+                });
+
+                ws.on('play', () => setIsPlaying(true));
+                ws.on('pause', () => setIsPlaying(false));
+                ws.on('finish', () => setIsPlaying(false));
+
+                setWavesurfer(ws);
+            } catch (err: any) {
+                console.error('[WaveformXRay] WaveSurfer initialization failed:', err);
+                setError(`Visualization failed: ${err?.message || 'Unknown error'}`);
+            }
+        };
+
+        initWaveSurfer();
 
         return () => {
-            ws.destroy();
+            try {
+                ws?.destroy();
+            } catch {
+                // Ignore destroy errors
+            }
         };
-    }, [data, jobId, audioSource, zoom]); // Re-init on source change/data load
+    }, [data, jobId, audioSource, zoom]);
 
     // Add Regions (Layers)
     useEffect(() => {
         if (!wavesurfer || !data || !regionsRef.current) return;
 
-        regionsRef.current.clearRegions();
+        try {
+            regionsRef.current.clearRegions();
 
-        data.layers.forEach((layer) => {
-            const color =
-                layer.name === 'Drums' ? 'rgba(239, 68, 68, 0.2)' : // Red
-                    layer.name === 'Bass' ? 'rgba(245, 158, 11, 0.2)' : // Amber
-                        layer.name === 'Vocals' ? 'rgba(16, 185, 129, 0.2)' : // Emerald
-                            'rgba(99, 102, 241, 0.2)'; // Indigo
+            data.layers.forEach((layer) => {
+                const color =
+                    layer.name === 'Drums' ? 'rgba(239, 68, 68, 0.2)' :
+                        layer.name === 'Bass' ? 'rgba(245, 158, 11, 0.2)' :
+                            layer.name === 'Vocals' ? 'rgba(16, 185, 129, 0.2)' :
+                                'rgba(99, 102, 241, 0.2)';
 
-            layer.events.forEach((event) => {
-                if (layer.type === 'point' && event.time !== undefined) {
-                    // Point event (Kick/Snare) -> create small region
-                    regionsRef.current.addRegion({
-                        start: event.time,
-                        end: event.time + 0.1,
-                        content: event.label,
-                        color: color,
-                        drag: false,
-                        resize: false,
-                    });
-                } else if (layer.type === 'region' && event.start !== undefined && event.end !== undefined) {
-                    // Range event (Vocals)
-                    regionsRef.current.addRegion({
-                        start: event.start,
-                        end: event.end,
-                        content: event.label,
-                        color: color,
-                        drag: false,
-                        resize: false,
-                    });
-                }
+                (layer.events || []).forEach((event) => {
+                    if (layer.type === 'point' && event.time !== undefined && isFinite(event.time)) {
+                        regionsRef.current.addRegion({
+                            start: event.time,
+                            end: event.time + 0.1,
+                            content: event.label,
+                            color: color,
+                            drag: false,
+                            resize: false,
+                        });
+                    } else if (layer.type === 'region' && event.start !== undefined && event.end !== undefined && isFinite(event.start) && isFinite(event.end)) {
+                        regionsRef.current.addRegion({
+                            start: event.start,
+                            end: event.end,
+                            content: event.label,
+                            color: color,
+                            drag: false,
+                            resize: false,
+                        });
+                    }
+                });
             });
-        });
-
+        } catch (err) {
+            console.warn('[WaveformXRay] Error adding regions (non-fatal):', err);
+        }
     }, [wavesurfer, data]);
 
     // Handle Zoom
     useEffect(() => {
         if (wavesurfer) {
-            wavesurfer.zoom(zoom);
+            try {
+                wavesurfer.zoom(zoom);
+            } catch {
+                // Ignore zoom errors
+            }
         }
     }, [zoom, wavesurfer]);
 
-    const togglePlay = () => wavesurfer?.playPause();
+    const togglePlay = () => {
+        try {
+            wavesurfer?.playPause();
+        } catch {
+            // Ignore playback errors
+        }
+    };
 
     if (loading) return <div className="p-4 text-center text-gray-400">Loading X-Ray data...</div>;
-    if (!data) return <div className="p-4 text-center text-red-400">Failed to load X-Ray data.</div>;
+
+    if (error || !data) {
+        return (
+            <div className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl p-6 text-center space-y-2">
+                <span className="text-2xl">🩻</span>
+                <p className="text-zinc-400 text-sm">
+                    {error || 'X-Ray data not available for this job.'}
+                </p>
+                <p className="text-zinc-600 text-xs">
+                    This may happen if the server was restarted after reconstruction.
+                    Try uploading and reconstructing the track again.
+                </p>
+            </div>
+        );
+    }
 
     return (
         <div className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 space-y-4">
@@ -231,5 +346,15 @@ export default function WaveformXRay({ jobId }: WaveformXRayProps) {
                 </div>
             </div>
         </div>
+    );
+}
+
+/* ── Exported Component (with Error Boundary) ──────── */
+
+export default function WaveformXRay({ jobId }: WaveformXRayProps) {
+    return (
+        <WaveformErrorBoundary>
+            <WaveformXRayInner jobId={jobId} />
+        </WaveformErrorBoundary>
     );
 }
