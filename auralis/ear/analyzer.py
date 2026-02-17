@@ -35,11 +35,18 @@ def detect_drum_events(drum_stem: Path) -> list[dict[str, Any]]:
         onset_times = librosa.frames_to_time(onset_frames, sr=sr)
         
         # Spectral centroid for classification
-        centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
-        
+        centroids_raw = librosa.feature.spectral_centroid(y=y, sr=sr)
+        if centroids_raw.ndim == 2 and centroids_raw.shape[1] > 0:
+            centroids = centroids_raw[0]
+        else:
+             centroids = np.zeros(len(onset_frames))
+
         for frame, time in zip(onset_frames, onset_times):
             # Get centroid at this frame
-            centroid = centroids[min(frame, len(centroids)-1)]
+            idx = min(frame, len(centroids)-1)
+            if idx < 0:
+                continue
+            centroid = centroids[idx]
             
             label = "Percussion"
             if centroid < 150:

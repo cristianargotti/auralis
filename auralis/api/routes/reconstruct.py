@@ -209,7 +209,7 @@ def _sanitize_for_json(obj: Any) -> Any:
     if isinstance(obj, np.floating) or isinstance(obj, float):
         val = float(obj)
         if np.isnan(val) or np.isinf(val):
-            return None  # Or 0.0, but None is safer for "no data"
+            return 0.0  # Use 0.0 instead of None to prevent client crashes (e.g. WaveSurfer peaks)
         return val
     if isinstance(obj, np.bool_):
         return bool(obj)
