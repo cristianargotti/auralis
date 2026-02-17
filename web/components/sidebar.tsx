@@ -48,6 +48,12 @@ const NAV_ITEMS = [
         description: "Quality report",
     },
     {
+        label: "DNA Bank",
+        href: "/reference",
+        icon: "🧬",
+        description: "Reference library",
+    },
+    {
         label: "Reconstruct",
         href: "/reconstruct",
         icon: "🔬",

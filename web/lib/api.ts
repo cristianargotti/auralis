@@ -226,3 +226,54 @@ export async function fetchVizImage(type: string, projectId: string): Promise<st
     const blob = await res.blob();
     return URL.createObjectURL(blob);
 }
+
+// ── Reference DNA Bank ─────────────────────────────────
+
+export interface ReferenceEntry {
+    track_id: string;
+    name: string;
+    bpm: number;
+    key: string;
+    lufs: number;
+    stems: string[];
+    created_at: string;
+}
+
+export interface GapReport {
+    overall_score: number;
+    reference_count: number;
+    lufs_gap: number;
+    your_lufs: number;
+    ref_lufs: number;
+    stem_gaps: Record<string, {
+        stem_name: string;
+        quality_score: number;
+        rms_gap_db: number;
+        suggestions: string[];
+    }>;
+    top_improvements: string[];
+    summary: string;
+}
+
+export async function addReference(jobId: string, name?: string) {
+    return api<{ track_id: string; name: string; message: string }>(
+        "/api/reference/add",
+        { method: "POST", body: JSON.stringify({ job_id: jobId, name: name || "" }) }
+    );
+}
+
+export async function listReferences() {
+    return api<{ count: number; references: ReferenceEntry[] }>("/api/reference/list");
+}
+
+export async function getReferenceAverages() {
+    return api<Record<string, unknown>>("/api/reference/averages");
+}
+
+export async function getGapAnalysis(jobId: string) {
+    return api<GapReport>(`/api/reference/gap/${jobId}`);
+}
+
+export async function removeReference(trackId: string) {
+    return api<{ message: string }>(`/api/reference/${trackId}`, { method: "DELETE" });
+}
