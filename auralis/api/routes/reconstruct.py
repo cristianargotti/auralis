@@ -888,6 +888,10 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         job["stages"]["ear"]["status"] = "completed"
         job["progress"] = 20
         _log(job, "✓ EAR stage complete", "success")
+        # Persist analysis in job result for reference bank API
+        if job.get("result") is None:
+            job["result"] = {}
+        job["result"]["analysis"] = analysis  # type: ignore[index]
         gc.collect()  # aggressive cleanup before next stage
 
         # Stage 2: PLAN — Auto-detect structure
@@ -1071,6 +1075,43 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         # Gather analysis data for stem recipes
         stem_analysis_data = (job.get("result") or {}).get("stem_analysis", {})
         ear_analysis_data = analysis  # Full EAR analysis from stage 1
+
+        # Run gap analysis against reference bank
+        ref_targets: dict[str, Any] = {}
+        try:
+            from auralis.ear.reference_bank import ReferenceBank
+            from auralis.console.gap_analyzer import analyze_gaps, format_gap_report_for_logs
+
+            bank = ReferenceBank(settings.projects_dir)
+            if bank.count() > 0:
+                gap_report = analyze_gaps(ear_analysis_data, stem_analysis_data, bank)
+                # Store gap report in results
+                if job.get("result") is None:
+                    job["result"] = {}
+                job["result"]["gap_report"] = gap_report.to_dict()
+
+                # Log the gap report
+                for line in format_gap_report_for_logs(gap_report):
+                    _log(job, line)
+                _log(job, "")
+
+                # Extract reference targets for stem recipes
+                stem_avgs = bank.get_stem_averages()
+                ref_targets = {
+                    k: {
+                        "rms_db": v.rms_db,
+                        "peak_db": v.peak_db,
+                        "freq_bands": v.freq_bands,
+                        "dynamic_range_db": v.dynamic_range_db,
+                        "energy_pct": v.energy_pct,
+                    }
+                    for k, v in stem_avgs.items()
+                }
+            else:
+                _log(job, "📊 No references in bank — using default recipes")
+                _log(job, "   Add pro tracks via /api/reference/add to enable gap analysis")
+        except Exception as gap_err:
+            _log(job, f"Gap analysis skipped: {gap_err}", "warning")
 
         try:
             if rendered_stems:

@@ -12,6 +12,7 @@ from auralis.api.routes.grid import router as grid_router
 from auralis.api.routes.hands import router as hands_router
 from auralis.api.routes.reconstruct import router as reconstruct_router
 from auralis.api.routes.reconstruct import media_router as reconstruct_media_router
+from auralis.api.routes.reference import router as reference_router
 from auralis.api.websocket import websocket_endpoint
 
 app = FastAPI(
@@ -66,6 +67,11 @@ app.include_router(
 )
 app.include_router(
     reconstruct_router,
+    prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    reference_router,
     prefix="/api",
     dependencies=[Depends(get_current_user)],
 )
@@ -132,6 +138,10 @@ async def info() -> dict[str, object]:
             "reconstruct_start": "POST /api/reconstruct/start",
             "reconstruct_status": "GET /api/reconstruct/status/{job_id}",
             "reconstruct_jobs": "GET /api/reconstruct/jobs",
+            "reference_add": "POST /api/reference/add",
+            "reference_list": "GET /api/reference/list",
+            "reference_averages": "GET /api/reference/averages",
+            "reference_gap": "GET /api/reference/gap/{job_id}",
             "gpu_status": "GET /api/gpu/status",
             "websocket": "WS /ws/{project_id}",
         },
