@@ -77,7 +77,7 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
         return true;
     });
 
-    // Load track — fetch as blob for auth, fallback to query-param URL
+    // Load track — stream directly via ?token= URL (API supports dual-mode auth)
     const loadTrack = useCallback(async (trackKey: string) => {
         const audio = audioRef.current;
         if (!audio) return;
@@ -85,13 +85,8 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
         const wasPlaying = playing;
         const pos = audio.currentTime;
 
-        try {
-            const blobUrl = await fetchAudioBlob(jobId, trackKey);
-            audio.src = blobUrl;
-        } catch {
-            // Fallback to ?token= query param URL
-            audio.src = getAudioUrl(jobId, trackKey);
-        }
+        // Direct URL streaming with ?token= — much faster for large WAV files
+        audio.src = getAudioUrl(jobId, trackKey);
 
         audio.load();
         audio.onloadeddata = () => {
