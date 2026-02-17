@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     aws_profile: str = ""
     aws_region: str = "us-east-1"
 
+    # Replicate (Gen AI)
+    replicate_api_token: str = ""
+
     # Paths
     projects_dir: Path = Path("./projects")
     samples_dir: Path = Path("./samples")

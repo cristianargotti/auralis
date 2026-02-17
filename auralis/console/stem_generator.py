@@ -43,6 +43,20 @@ from auralis.hands.synth import (
 
 logger = structlog.get_logger()
 
+# Global client cache
+_AI_CLIENT = None
+
+def _get_ai_client() -> Any:
+    global _AI_CLIENT
+    if _AI_CLIENT is None:
+        try:
+            from auralis.hands.stable_audio import StableAudioClient
+            _AI_CLIENT = StableAudioClient()
+        except ImportError:
+            _AI_CLIENT = False
+    return _AI_CLIENT if _AI_CLIENT is not False else None
+
+
 
 # ── One-Shot Extraction (Organic) ───────────────────────
 
@@ -378,6 +392,41 @@ def generate_stem(
         patch=decision.synth_patch,
         style=decision.pattern_style,
     )
+
+    # ── AI GENERATION (Phase 5) ─────────────────────────
+    # For tonal elements, try Stable Audio first
+    if stem_name in ("bass", "other", "vocals") and action in ("replace", "enhance"):
+        ai = _get_ai_client()
+        if ai and ai.api_token:
+            # Construct intelligent prompt
+            genre_hint = "electronic"  # Could be derived from global context if available
+            style = decision.pattern_style or "modern"
+            prompt = (
+                f"{style} {stem_name} loop, {genre_hint} genre, "
+                f"{bpm} BPM, key of {key} {scale}, "
+                f"high fidelity, pro production, {decision.synth_patch or ''}"
+            ).strip()
+            
+            # For ENHANCE, we might want a "texture" or "layer"
+            if action == "enhance":
+                prompt += ", atmospheric texture, layering tool"
+
+            logger.info("stem_generator.ai_attempt", prompt=prompt)
+            
+            ai_path = ai.generate_loop(
+                prompt=prompt,
+                bpm=bpm,
+                seconds=duration_s,
+                output_dir=output_dir,
+            )
+            
+            if ai_path:
+                logger.info("stem_generator.ai_success", path=str(ai_path))
+                return ai_path
+            
+            logger.warning("stem_generator.ai_failed", msg="Falling back to synth")
+
+    # ── ALGORITHMIC FALLBACK ────────────────────────────
 
     try:
         audio: NDArray[np.float64] | None = None
