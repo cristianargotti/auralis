@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { apiFetch } from "@/lib/api";
 
 /* ── Types ── */
 interface SpectralCompareProps {
@@ -27,16 +28,14 @@ export default function SpectralCompare({ jobId, hasOriginal = true, hasMaster =
             try {
                 const urls: string[] = [];
                 if (hasOriginal) {
-                    const origUrl = `/api/reconstruct/spectrogram/${jobId}/original`;
-                    const res = await fetch(origUrl);
+                    const res = await apiFetch(`/api/reconstruct/spectrogram/${jobId}/original`);
                     if (res.ok) {
                         const blob = await res.blob();
                         urls.push(URL.createObjectURL(blob));
                     }
                 }
                 if (hasMaster) {
-                    const masterUrlStr = `/api/reconstruct/spectrogram/${jobId}/master`;
-                    const res = await fetch(masterUrlStr);
+                    const res = await apiFetch(`/api/reconstruct/spectrogram/${jobId}/master`);
                     if (res.ok) {
                         const blob = await res.blob();
                         urls.push(URL.createObjectURL(blob));
@@ -87,8 +86,8 @@ export default function SpectralCompare({ jobId, hasOriginal = true, hasMaster =
                             key={m.key}
                             onClick={() => setMode(m.key)}
                             className={`text-[10px] px-2 py-1 rounded-md transition-all ${mode === m.key
-                                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
-                                    : "text-zinc-500 hover:text-zinc-300 border border-transparent"
+                                ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                                : "text-zinc-500 hover:text-zinc-300 border border-transparent"
                                 }`}
                         >
                             {m.icon} {m.label}

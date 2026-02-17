@@ -11,10 +11,10 @@ Generate a password hash with scripts/gen_password.py
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 import bcrypt as _bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -96,5 +96,46 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserPayload:
         if username is None:
             raise credentials_exception
         return UserPayload(username=username, exp=datetime.fromtimestamp(payload["exp"], tz=UTC))
+    except JWTError:
+        raise credentials_exception from None
+
+
+async def get_current_user_or_token(
+    request: Request,
+    token: Optional[str] = Query(None, alias="token"),
+) -> UserPayload:
+    """Authenticate via Bearer header OR ?token= query param.
+
+    Browser-native elements (<audio>, <a>, <img>) cannot send
+    Authorization headers, so we also accept JWT as a query parameter.
+    """
+    # 1. Try Authorization header first
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        jwt_token = auth_header[7:]
+    elif token:
+        # 2. Fall back to ?token= query param
+        jwt_token = token
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(jwt_token, settings.jwt_secret, algorithms=[_ALGORITHM])
+        username: str | None = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        return UserPayload(
+            username=username,
+            exp=datetime.fromtimestamp(payload["exp"], tz=UTC),
+        )
     except JWTError:
         raise credentials_exception from None

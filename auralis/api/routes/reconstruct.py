@@ -19,13 +19,18 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from auralis.api.auth import get_current_user_or_token
 from auralis.config import settings
 
 router = APIRouter(prefix="/reconstruct", tags=["reconstruct"])
+
+# Separate router for media endpoints that need dual-mode auth
+# (Authorization header OR ?token= query param for browser-native elements)
+media_router = APIRouter(prefix="/reconstruct", tags=["reconstruct-media"])
 
 # In-memory job tracking
 _reconstruct_jobs: dict[str, dict[str, Any]] = {}
@@ -349,8 +354,12 @@ async def get_waveform_data(job_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/audio/{job_id}/{file_key}")
-async def get_audio_file(job_id: str, file_key: str):
+@media_router.get("/audio/{job_id}/{file_key}")
+async def get_audio_file(
+    job_id: str,
+    file_key: str,
+    _user=Depends(get_current_user_or_token),
+):
     """Stream audio file (original, mix, stem_*)."""
     if job_id not in _reconstruct_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -379,8 +388,12 @@ async def get_audio_file(job_id: str, file_key: str):
     return FileResponse(file_path, media_type="audio/wav")
 
 
-@router.get("/spectrogram/{job_id}/{file_key}")
-async def get_spectrogram(job_id: str, file_key: str):
+@media_router.get("/spectrogram/{job_id}/{file_key}")
+async def get_spectrogram(
+    job_id: str,
+    file_key: str,
+    _user=Depends(get_current_user_or_token),
+):
     """Generate and return mel spectrogram as PNG image."""
     if job_id not in _reconstruct_jobs:
         raise HTTPException(status_code=404, detail="Job not found")

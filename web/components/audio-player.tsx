@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { apiFetch } from "@/lib/api";
 
 /* ── Types ── */
 interface Track {
@@ -23,7 +24,7 @@ const TRACKS: Track[] = [
     { key: "original", label: "Original", icon: "🎵", color: "#f59e0b", group: "main" },
     { key: "master", label: "Master", icon: "💎", color: "#8b5cf6", group: "main" },
     { key: "stem_drums", label: "Drums", icon: "🥁", color: "#06b6d4", group: "stem" },
-    { key: "stem_bass", label: "Bass", icon: "🎸", color: "#f43f5e", group: "stem" },
+    { key: "stem_bass", label: "Bass", icon: "🎸", color: "#ef4444", group: "stem" },
     { key: "stem_vocals", label: "Vocals", icon: "🎤", color: "#a855f7", group: "stem" },
     { key: "stem_other", label: "Other", icon: "🎹", color: "#10b981", group: "stem" },
 ];
@@ -38,6 +39,14 @@ function formatTime(s: number): string {
 function getAudioUrl(jobId: string, fileKey: string): string {
     const token = typeof window !== "undefined" ? localStorage.getItem("auralis_token") : null;
     return `/api/reconstruct/audio/${jobId}/${fileKey}${token ? `?token=${token}` : ""}`;
+}
+
+/** Fetch audio as blob with proper auth and return a blob URL */
+async function fetchAudioBlob(jobId: string, fileKey: string): Promise<string> {
+    const res = await apiFetch(`/api/reconstruct/audio/${jobId}/${fileKey}`);
+    if (!res.ok) throw new Error(`Audio fetch failed: ${res.status}`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
 }
 
 /* ── Component ── */
@@ -68,14 +77,22 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
         return true;
     });
 
-    // Load track
-    const loadTrack = useCallback((trackKey: string) => {
+    // Load track — fetch as blob for auth, fallback to query-param URL
+    const loadTrack = useCallback(async (trackKey: string) => {
         const audio = audioRef.current;
         if (!audio) return;
         setLoading(true);
         const wasPlaying = playing;
         const pos = audio.currentTime;
-        audio.src = getAudioUrl(jobId, trackKey);
+
+        try {
+            const blobUrl = await fetchAudioBlob(jobId, trackKey);
+            audio.src = blobUrl;
+        } catch {
+            // Fallback to ?token= query param URL
+            audio.src = getAudioUrl(jobId, trackKey);
+        }
+
         audio.load();
         audio.onloadeddata = () => {
             setLoading(false);
@@ -235,8 +252,8 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
                     <button
                         onClick={toggleAB}
                         className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all ${abMode
-                                ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
-                                : "bg-zinc-800 text-zinc-500 hover:text-zinc-300 border border-zinc-700"
+                            ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                            : "bg-zinc-800 text-zinc-500 hover:text-zinc-300 border border-zinc-700"
                             }`}
                     >
                         {abMode ? `A/B: ${abTrack === "original" ? "A (Original)" : "B (Master)"}` : "A/B Compare"}
@@ -336,8 +353,8 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
                                 switchTrack(track.key);
                             }}
                             className={`text-xs px-3 py-1.5 rounded-lg transition-all font-medium ${activeTrack === track.key
-                                    ? "text-white shadow-lg"
-                                    : "bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                                ? "text-white shadow-lg"
+                                : "bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
                                 }`}
                             style={activeTrack === track.key ? {
                                 backgroundColor: `${track.color}20`,
