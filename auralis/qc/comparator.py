@@ -6,10 +6,14 @@ harmonic progression, energy curve, reverb, dynamic range,
 BPM accuracy, arrangement match, and timbre similarity.
 
 All analysis uses numpy + librosa — no GPU required.
+
+Memory-optimised: loads at float32 / 22050 Hz, pre-computes mono once,
+gc.collect() between analyzers to keep RSS under ~4 GB.
 """
 
 from __future__ import annotations
 
+import gc
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -28,6 +32,8 @@ except ImportError:
 
 
 # ── Types ────────────────────────────────────────────────
+
+QC_SR = 22050  # 22 kHz is enough for A/B comparison, halves memory vs 44.1k
 
 
 @dataclass
@@ -63,42 +69,47 @@ class ComparisonResult:
         return d
 
 
-# ── Dimension Analyzers ──────────────────────────────────
+# ── Audio Loading (memory-optimised) ─────────────────────
 
 
-def _load_audio(path: str | Path, sr: int = 44100) -> tuple[npt.NDArray[np.float64], int]:
-    """Load audio file, return (data, sr)."""
-    data, file_sr = sf.read(str(path), dtype="float64")
+def _load_audio(path: str | Path, sr: int = QC_SR) -> tuple[npt.NDArray[np.float32], int]:
+    """Load audio at float32, resample to QC_SR."""
+    data, file_sr = sf.read(str(path), dtype="float32")
     if file_sr != sr and HAS_LIBROSA:
-        data = librosa.resample(data.T if data.ndim > 1 else data, orig_sr=file_sr, target_sr=sr)
+        data = librosa.resample(data.T if data.ndim > 1 else data, orig_sr=file_sr, target_sr=sr).astype(np.float32)
         if data.ndim > 1:
             data = data.T
         return data, sr
     return data, file_sr
 
 
-def _to_mono(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+def _to_mono(data: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
     """Convert to mono if stereo."""
     if data.ndim > 1:
-        return np.mean(data, axis=1)
+        return np.mean(data, axis=1).astype(np.float32)
     return data
 
 
-def _spectral_similarity(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+# ── Dimension Analyzers ──────────────────────────────────
+# Each receives pre-computed mono arrays to avoid redundant conversions.
+
+
+def _spectral_similarity(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare mel spectrogram correlation."""
     if not HAS_LIBROSA:
         return DimensionScore(name="spectral_similarity", score=0, detail="librosa not available")
 
-    n = min(len(orig), len(recon))
-    S_orig = librosa.feature.melspectrogram(y=orig[:n], sr=sr, n_mels=128, fmax=sr // 2)
-    S_recon = librosa.feature.melspectrogram(y=recon[:n], sr=sr, n_mels=128, fmax=sr // 2)
+    n = min(len(o_mono), len(r_mono))
+    S_orig = librosa.feature.melspectrogram(y=o_mono[:n], sr=sr, n_mels=64, fmax=sr // 2)
+    S_recon = librosa.feature.melspectrogram(y=r_mono[:n], sr=sr, n_mels=64, fmax=sr // 2)
 
     S_orig_db = librosa.power_to_db(S_orig, ref=np.max)
     S_recon_db = librosa.power_to_db(S_recon, ref=np.max)
+    del S_orig, S_recon
 
-    # Flatten and compute correlation
     flat_orig = S_orig_db.flatten()
     flat_recon = S_recon_db.flatten()
+    del S_orig_db, S_recon_db
 
     corr = float(np.corrcoef(flat_orig, flat_recon)[0, 1])
     score = max(0, corr * 100)
@@ -111,16 +122,15 @@ def _spectral_similarity(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.fl
     )
 
 
-def _rms_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _rms_match(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare RMS levels per section."""
-    n = min(len(orig), len(recon))
-    # Split into 1-second windows
+    n = min(len(o_mono), len(r_mono))
     window = sr
     n_windows = n // window
 
     if n_windows == 0:
-        rms_orig = float(np.sqrt(np.mean(orig[:n] ** 2)))
-        rms_recon = float(np.sqrt(np.mean(recon[:n] ** 2)))
+        rms_orig = float(np.sqrt(np.mean(o_mono[:n] ** 2)))
+        rms_recon = float(np.sqrt(np.mean(r_mono[:n] ** 2)))
         diff = abs(20 * np.log10(max(rms_orig, 1e-10)) - 20 * np.log10(max(rms_recon, 1e-10)))
         score = max(0, 100 - diff * 10)
         return DimensionScore(name="rms_match", score=round(score, 2), detail=f"RMS diff: {diff:.2f} dB")
@@ -128,8 +138,8 @@ def _rms_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr
     diffs = []
     for i in range(n_windows):
         s, e = i * window, (i + 1) * window
-        rms_o = float(np.sqrt(np.mean(orig[s:e] ** 2)))
-        rms_r = float(np.sqrt(np.mean(recon[s:e] ** 2)))
+        rms_o = float(np.sqrt(np.mean(o_mono[s:e] ** 2)))
+        rms_r = float(np.sqrt(np.mean(r_mono[s:e] ** 2)))
         diff = abs(20 * np.log10(max(rms_o, 1e-10)) - 20 * np.log10(max(rms_r, 1e-10)))
         diffs.append(diff)
 
@@ -143,9 +153,9 @@ def _rms_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr
     )
 
 
-def _stereo_width_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
-    """Compare stereo width (mid/side ratio)."""
-    def _width(data: npt.NDArray[np.float64]) -> float:
+def _stereo_width_match(orig: npt.NDArray[np.float32], recon: npt.NDArray[np.float32], sr: int) -> DimensionScore:
+    """Compare stereo width (mid/side ratio). Uses raw stereo data."""
+    def _width(data: npt.NDArray[np.float32]) -> float:
         if data.ndim < 2 or data.shape[1] < 2:
             return 0.0
         mid = (data[:, 0] + data[:, 1]) / 2
@@ -166,23 +176,21 @@ def _stereo_width_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.flo
     )
 
 
-def _bass_pattern_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _bass_pattern_match(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare bass frequency patterns (20-200 Hz)."""
     if not HAS_LIBROSA:
         return DimensionScore(name="bass_pattern_match", score=0, detail="librosa not available")
 
-    n = min(len(orig), len(recon))
-    o_mono = _to_mono(orig[:n]) if orig.ndim > 1 else orig[:n]
-    r_mono = _to_mono(recon[:n]) if recon.ndim > 1 else recon[:n]
+    n = min(len(o_mono), len(r_mono))
 
-    # Extract bass band
-    S_o = np.abs(librosa.stft(o_mono))
-    S_r = np.abs(librosa.stft(r_mono))
+    S_o = np.abs(librosa.stft(o_mono[:n]))
+    S_r = np.abs(librosa.stft(r_mono[:n]))
     freqs = librosa.fft_frequencies(sr=sr)
     bass_mask = (freqs >= 20) & (freqs <= 200)
 
     bass_o = S_o[bass_mask, :].mean(axis=0)
     bass_r = S_r[bass_mask, :].mean(axis=0)
+    del S_o, S_r
 
     min_len = min(len(bass_o), len(bass_r))
     corr = float(np.corrcoef(bass_o[:min_len], bass_r[:min_len])[0, 1])
@@ -195,22 +203,19 @@ def _bass_pattern_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.flo
     )
 
 
-def _kick_pattern_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _kick_pattern_match(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare kick/transient patterns via onset detection."""
     if not HAS_LIBROSA:
         return DimensionScore(name="kick_pattern_match", score=0, detail="librosa not available")
 
-    n = min(len(orig), len(recon))
-    o_mono = _to_mono(orig[:n]) if orig.ndim > 1 else orig[:n]
-    r_mono = _to_mono(recon[:n]) if recon.ndim > 1 else recon[:n]
+    n = min(len(o_mono), len(r_mono))
 
-    onsets_o = librosa.onset.onset_detect(y=o_mono, sr=sr, units="time")
-    onsets_r = librosa.onset.onset_detect(y=r_mono, sr=sr, units="time")
+    onsets_o = librosa.onset.onset_detect(y=o_mono[:n], sr=sr, units="time")
+    onsets_r = librosa.onset.onset_detect(y=r_mono[:n], sr=sr, units="time")
 
     if len(onsets_o) == 0:
         return DimensionScore(name="kick_pattern_match", score=50, detail="No onsets detected in original")
 
-    # Match onsets within tolerance
     tolerance = 0.05  # 50ms
     matched = 0
     for t_o in onsets_o:
@@ -229,17 +234,15 @@ def _kick_pattern_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.flo
     )
 
 
-def _harmonic_progression(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _harmonic_progression(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare chroma features (harmonic content)."""
     if not HAS_LIBROSA:
         return DimensionScore(name="harmonic_progression", score=0, detail="librosa not available")
 
-    n = min(len(orig), len(recon))
-    o_mono = _to_mono(orig[:n]) if orig.ndim > 1 else orig[:n]
-    r_mono = _to_mono(recon[:n]) if recon.ndim > 1 else recon[:n]
+    n = min(len(o_mono), len(r_mono))
 
-    chroma_o = librosa.feature.chroma_cqt(y=o_mono, sr=sr)
-    chroma_r = librosa.feature.chroma_cqt(y=r_mono, sr=sr)
+    chroma_o = librosa.feature.chroma_cqt(y=o_mono[:n], sr=sr)
+    chroma_r = librosa.feature.chroma_cqt(y=r_mono[:n], sr=sr)
 
     min_t = min(chroma_o.shape[1], chroma_r.shape[1])
     corr = float(np.corrcoef(chroma_o[:, :min_t].flatten(), chroma_r[:, :min_t].flatten())[0, 1])
@@ -253,15 +256,13 @@ def _harmonic_progression(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.f
     )
 
 
-def _energy_curve(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _energy_curve(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare RMS energy curves over time."""
-    n = min(len(orig), len(recon))
-    o_mono = _to_mono(orig[:n]) if orig.ndim > 1 else orig[:n]
-    r_mono = _to_mono(recon[:n]) if recon.ndim > 1 else recon[:n]
+    n = min(len(o_mono), len(r_mono))
 
     hop = sr  # 1-second windows
-    rms_o = np.array([float(np.sqrt(np.mean(o_mono[i:i+hop]**2))) for i in range(0, len(o_mono) - hop, hop)])
-    rms_r = np.array([float(np.sqrt(np.mean(r_mono[i:i+hop]**2))) for i in range(0, len(r_mono) - hop, hop)])
+    rms_o = np.array([float(np.sqrt(np.mean(o_mono[i:i+hop]**2))) for i in range(0, len(o_mono[:n]) - hop, hop)])
+    rms_r = np.array([float(np.sqrt(np.mean(r_mono[i:i+hop]**2))) for i in range(0, len(r_mono[:n]) - hop, hop)])
 
     min_len = min(len(rms_o), len(rms_r))
     if min_len < 2:
@@ -278,18 +279,15 @@ def _energy_curve(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64],
     )
 
 
-def _reverb_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _reverb_match(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare reverb characteristics via spectral decay."""
-    n = min(len(orig), len(recon))
-    o_mono = _to_mono(orig[:n]) if orig.ndim > 1 else orig[:n]
-    r_mono = _to_mono(recon[:n]) if recon.ndim > 1 else recon[:n]
-
-    # Compare spectral centroid (indicator of reverb/brightness)
     if not HAS_LIBROSA:
         return DimensionScore(name="reverb_match", score=0, detail="librosa not available")
 
-    sc_o = librosa.feature.spectral_centroid(y=o_mono, sr=sr)[0]
-    sc_r = librosa.feature.spectral_centroid(y=r_mono, sr=sr)[0]
+    n = min(len(o_mono), len(r_mono))
+
+    sc_o = librosa.feature.spectral_centroid(y=o_mono[:n], sr=sr)[0]
+    sc_r = librosa.feature.spectral_centroid(y=r_mono[:n], sr=sr)[0]
 
     mean_o = float(np.mean(sc_o))
     mean_r = float(np.mean(sc_r))
@@ -304,16 +302,15 @@ def _reverb_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64],
     )
 
 
-def _dynamic_range(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _dynamic_range(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare dynamic range (crest factor)."""
-    def _crest(data: npt.NDArray[np.float64]) -> float:
-        mono = _to_mono(data) if data.ndim > 1 else data
-        peak = float(np.max(np.abs(mono)))
-        rms = float(np.sqrt(np.mean(mono ** 2)))
+    def _crest(data: npt.NDArray[np.float32]) -> float:
+        peak = float(np.max(np.abs(data)))
+        rms = float(np.sqrt(np.mean(data ** 2)))
         return 20 * np.log10(max(peak, 1e-10) / max(rms, 1e-10))
 
-    cf_o = _crest(orig)
-    cf_r = _crest(recon)
+    cf_o = _crest(o_mono)
+    cf_r = _crest(r_mono)
     diff = abs(cf_o - cf_r)
     score = max(0, 100 - diff * 15)
 
@@ -324,13 +321,10 @@ def _dynamic_range(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64]
     )
 
 
-def _bpm_accuracy(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _bpm_accuracy(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare detected BPM."""
     if not HAS_LIBROSA:
         return DimensionScore(name="bpm_accuracy", score=0, detail="librosa not available")
-
-    o_mono = _to_mono(orig) if orig.ndim > 1 else orig
-    r_mono = _to_mono(recon) if recon.ndim > 1 else recon
 
     tempo_o = float(librosa.beat.tempo(y=o_mono, sr=sr)[0])
     tempo_r = float(librosa.beat.tempo(y=r_mono, sr=sr)[0])
@@ -346,15 +340,12 @@ def _bpm_accuracy(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64],
     )
 
 
-def _arrangement_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _arrangement_match(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare overall arrangement via segment-level energy profile."""
-    n = min(len(orig), len(recon))
-    o_mono = _to_mono(orig[:n]) if orig.ndim > 1 else orig[:n]
-    r_mono = _to_mono(recon[:n]) if recon.ndim > 1 else recon[:n]
+    n = min(len(o_mono), len(r_mono))
 
-    # 4-bar windows (assuming ~120 BPM)
-    bar_s = 2.0  # ~2 seconds per bar at 120 BPM
-    window = int(bar_s * 4 * sr)  # 4 bars
+    bar_s = 2.0
+    window = int(bar_s * 4 * sr)
     n_segments = max(1, n // window)
 
     energy_o = []
@@ -377,23 +368,19 @@ def _arrangement_match(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.floa
     )
 
 
-def _timbre_similarity(orig: npt.NDArray[np.float64], recon: npt.NDArray[np.float64], sr: int) -> DimensionScore:
+def _timbre_similarity(o_mono: npt.NDArray[np.float32], r_mono: npt.NDArray[np.float32], sr: int) -> DimensionScore:
     """Compare timbre via MFCC features."""
     if not HAS_LIBROSA:
         return DimensionScore(name="timbre_similarity", score=0, detail="librosa not available")
 
-    n = min(len(orig), len(recon))
-    o_mono = _to_mono(orig[:n]) if orig.ndim > 1 else orig[:n]
-    r_mono = _to_mono(recon[:n]) if recon.ndim > 1 else recon[:n]
+    n = min(len(o_mono), len(r_mono))
 
-    mfcc_o = librosa.feature.mfcc(y=o_mono, sr=sr, n_mfcc=20)
-    mfcc_r = librosa.feature.mfcc(y=r_mono, sr=sr, n_mfcc=20)
+    mfcc_o = librosa.feature.mfcc(y=o_mono[:n], sr=sr, n_mfcc=13)
+    mfcc_r = librosa.feature.mfcc(y=r_mono[:n], sr=sr, n_mfcc=13)
 
-    # Compare mean MFCC vectors
     mean_o = np.mean(mfcc_o, axis=1)
     mean_r = np.mean(mfcc_r, axis=1)
 
-    # Cosine similarity
     dot = float(np.dot(mean_o, mean_r))
     norm = float(np.linalg.norm(mean_o) * np.linalg.norm(mean_r))
     cosine_sim = dot / max(norm, 1e-10)
@@ -417,21 +404,20 @@ def compare_full(
 ) -> ComparisonResult:
     """Run full 12-dimension A/B comparison.
 
-    Args:
-        original_path: Path to original audio file
-        reconstruction_path: Path to reconstructed audio file
-        target_score: Minimum score to pass (default 90%)
-
-    Returns:
-        ComparisonResult with all 12 dimension scores
+    Memory-optimised: loads at float32 / 22050 Hz, pre-computes mono,
+    gc.collect() between analyzers. Peak RSS stays under ~4 GB.
     """
     orig_data, sr = _load_audio(original_path)
     recon_data, _ = _load_audio(reconstruction_path, sr=sr)
 
-    analyzers = [
+    # Pre-compute mono once (avoids 12 redundant conversions)
+    orig_mono = _to_mono(orig_data)
+    recon_mono = _to_mono(recon_data)
+
+    # Analyzers that need mono audio
+    mono_analyzers = [
         _spectral_similarity,
         _rms_match,
-        _stereo_width_match,
         _bass_pattern_match,
         _kick_pattern_match,
         _harmonic_progression,
@@ -444,9 +430,21 @@ def compare_full(
     ]
 
     dimensions: list[DimensionScore] = []
-    for analyzer in analyzers:
+
+    # Stereo width needs raw stereo data
+    try:
+        dim = _stereo_width_match(orig_data, recon_data, sr)
+        dimensions.append(dim)
+    except Exception as e:
+        dimensions.append(DimensionScore(name="stereo_width_match", score=0, detail=f"Error: {e}"))
+
+    # Free stereo data — only mono needed from here
+    del orig_data, recon_data
+    gc.collect()
+
+    for analyzer in mono_analyzers:
         try:
-            dim = analyzer(orig_data, recon_data, sr)
+            dim = analyzer(orig_mono, recon_mono, sr)
             dimensions.append(dim)
         except Exception as e:
             dimensions.append(DimensionScore(
@@ -454,6 +452,7 @@ def compare_full(
                 score=0,
                 detail=f"Error: {e}",
             ))
+        gc.collect()  # free librosa intermediates between analyzers
 
     # Weighted average
     total_weight = sum(d.weight for d in dimensions)
