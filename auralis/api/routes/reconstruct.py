@@ -206,12 +206,15 @@ def _sanitize_for_json(obj: Any) -> Any:
         return [_sanitize_for_json(v) for v in obj]
     if isinstance(obj, np.integer):
         return int(obj)
-    if isinstance(obj, np.floating):
-        return float(obj)
+    if isinstance(obj, np.floating) or isinstance(obj, float):
+        val = float(obj)
+        if np.isnan(val) or np.isinf(val):
+            return None  # Or 0.0, but None is safer for "no data"
+        return val
     if isinstance(obj, np.bool_):
         return bool(obj)
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return _sanitize_for_json(obj.tolist())
     return obj
 
 
@@ -582,6 +585,17 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 stem_files = list(stems_dir.glob("*.wav"))
                 for i, stem_file in enumerate(stem_files):
                     stem_name = stem_file.stem
+                    # Check for silence based on analysis
+                    is_silent = False
+                    if job.get("result") and "stem_analysis" in job["result"]:
+                        stem_info = job["result"]["stem_analysis"].get(stem_name)
+                        if stem_info and isinstance(stem_info, dict) and stem_info.get("rms_db", -100) < -60:
+                            is_silent = True
+                    
+                    if is_silent:
+                        _log(job, f"Skipping silent stem: {stem_name}")
+                        continue
+
                     job["stages"]["hands"]["message"] = (
                         f"Processing stem: {stem_name} ({i + 1}/{len(stem_files)})"
                     )
