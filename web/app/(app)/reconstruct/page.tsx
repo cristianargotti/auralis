@@ -86,6 +86,38 @@ interface ReconstructJob {
         rendered_sections?: number;
         rendered_stems: number;
         stem_analysis?: Record<string, StemAnalysis>;
+        brain_report?: {
+            stem_plans: Record<string, {
+                stem_name: string;
+                patch: string;
+                style: string;
+                reverb_wet: number;
+                delay_wet: number;
+                saturation_drive: number;
+                stereo_width: number;
+                use_organic: boolean;
+                organic_category: string;
+                ai_prompt_hints: string;
+                reasoning: string;
+                confidence: number;
+                volume_db: number;
+                sidechain: boolean;
+                sidechain_depth: number;
+                compression: string;
+                eq_adjustments: string;
+                fx_chain: string[];
+            }>;
+            master_plan: {
+                target_lufs: number;
+                master_style: string;
+                stereo_image: string;
+                low_end_strategy: string;
+                reasoning: string;
+                confidence: number;
+            };
+            reasoning_chain: string[];
+            interaction_log: string[];
+        };
         master?: {
             output?: string;
             peak_dbtp?: number;
@@ -101,6 +133,22 @@ interface ReconstructJob {
             passed?: boolean;
             weakest?: string;
             strongest?: string;
+        };
+        auto_correction?: {
+            stem_corrections: Record<string, {
+                needs_correction: boolean;
+                gap_score: number;
+                corrections: Record<string, any>;
+                reasoning: string[];
+            }>;
+            master: {
+                needs_correction: boolean;
+                gap_score: number;
+                reasoning: string[];
+            } | null;
+            pass_number: number;
+            total_gap: number;
+            should_reprocess: boolean;
         };
         files?: {
             original?: string;
@@ -985,6 +1033,192 @@ export default function ReconstructPage() {
                 </Card>
             )}
 
+            {/* 🧠 Brain Intelligence — AI Decision Transparency */}
+            {job?.result?.brain_report && (
+                <Card className="bg-zinc-900/50 border-zinc-800 overflow-hidden">
+                    <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <CardTitle className="text-lg">🧠 Brain Intelligence</CardTitle>
+                                <Badge variant="outline" className="border-pink-500/30 text-pink-400 text-[10px]">
+                                    DNA-guided
+                                </Badge>
+                            </div>
+                            <CardDescription className="text-[11px]">Why the AI made each decision</CardDescription>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        {/* Reasoning Chain */}
+                        {job.result.brain_report.reasoning_chain?.length > 0 && (
+                            <div>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-[10px] font-semibold text-pink-400 uppercase tracking-wider">Reasoning Chain</span>
+                                    <div className="flex-1 h-px bg-pink-500/10" />
+                                </div>
+                                <div className="space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar">
+                                    {job.result.brain_report.reasoning_chain.map((line, i) => (
+                                        <div
+                                            key={i}
+                                            className="flex items-start gap-2 px-3 py-1.5 rounded-lg bg-zinc-900/60 border border-zinc-800/30"
+                                            style={{ animationDelay: `${i * 50}ms`, animation: "fadeSlideIn 0.3s ease-out both" }}
+                                        >
+                                            <span className="text-pink-500/60 text-[10px] mt-0.5 font-mono min-w-[18px]">{i + 1}</span>
+                                            <span className="text-[11px] text-zinc-400 leading-relaxed">{line}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Per-Stem Decisions */}
+                        {Object.keys(job.result.brain_report.stem_plans).filter(k => k !== '_master').length > 0 && (
+                            <div>
+                                <div className="flex items-center gap-2 mb-3">
+                                    <span className="text-[10px] font-semibold text-cyan-400 uppercase tracking-wider">Stem Decisions</span>
+                                    <div className="flex-1 h-px bg-cyan-500/10" />
+                                </div>
+                                <div className="grid gap-2">
+                                    {Object.entries(job.result.brain_report.stem_plans)
+                                        .filter(([k]) => k !== '_master')
+                                        .map(([name, plan]) => {
+                                            const stemIcons: Record<string, string> = { drums: '🥁', bass: '🎸', vocals: '🎤', other: '🎹' };
+                                            const isOrganic = plan.use_organic;
+                                            return (
+                                                <div
+                                                    key={name}
+                                                    className={`rounded-xl border p-3 transition-all duration-300 ${isOrganic
+                                                        ? 'border-emerald-500/30 bg-emerald-500/5 hover:border-emerald-500/50'
+                                                        : 'border-zinc-800/60 bg-zinc-900/40 hover:border-zinc-700/60'
+                                                        }`}
+                                                >
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xl">{stemIcons[name] ?? '🎵'}</span>
+                                                            <span className="font-bold text-sm capitalize text-zinc-200">{name}</span>
+                                                            {isOrganic && (
+                                                                <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[9px] px-1.5">
+                                                                    🌿 Organic
+                                                                </Badge>
+                                                            )}
+                                                            {!isOrganic && (
+                                                                <Badge className="bg-blue-500/15 text-blue-400 border-blue-500/30 text-[9px] px-1.5">
+                                                                    🤖 AI Generated
+                                                                </Badge>
+                                                            )}
+                                                        </div>
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="text-[9px] text-zinc-600">confidence</span>
+                                                            <div className="w-12 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                                                                <div
+                                                                    className={`h-full rounded-full transition-all duration-700 ${plan.confidence > 0.7 ? 'bg-emerald-500' : plan.confidence > 0.4 ? 'bg-amber-500' : 'bg-red-500'
+                                                                        }`}
+                                                                    style={{ width: `${Math.round(plan.confidence * 100)}%` }}
+                                                                />
+                                                            </div>
+                                                            <span className="text-[10px] font-mono text-zinc-500">{Math.round(plan.confidence * 100)}%</span>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Decision details */}
+                                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-2">
+                                                        <div className="bg-zinc-900/60 rounded-lg px-2 py-1.5">
+                                                            <div className="text-[8px] text-zinc-600 uppercase">Patch</div>
+                                                            <div className="text-[11px] text-zinc-300 font-mono truncate">{plan.patch || '—'}</div>
+                                                        </div>
+                                                        <div className="bg-zinc-900/60 rounded-lg px-2 py-1.5">
+                                                            <div className="text-[8px] text-zinc-600 uppercase">Style</div>
+                                                            <div className="text-[11px] text-zinc-300 font-mono truncate">{plan.style || '—'}</div>
+                                                        </div>
+                                                        <div className="bg-zinc-900/60 rounded-lg px-2 py-1.5">
+                                                            <div className="text-[8px] text-zinc-600 uppercase">Volume</div>
+                                                            <div className="text-[11px] text-zinc-300 font-mono">{plan.volume_db ?? '—'} dB</div>
+                                                        </div>
+                                                        <div className="bg-zinc-900/60 rounded-lg px-2 py-1.5">
+                                                            <div className="text-[8px] text-zinc-600 uppercase">Sidechain</div>
+                                                            <div className="text-[11px] text-zinc-300 font-mono">{plan.sidechain ? `ON (${plan.sidechain_depth})` : 'OFF'}</div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* FX Chain */}
+                                                    <div className="flex flex-wrap gap-1 mb-2">
+                                                        {plan.reverb_wet > 0 && (
+                                                            <span className="text-[9px] bg-violet-500/10 text-violet-400 border border-violet-500/20 rounded-full px-2 py-0.5">
+                                                                Reverb {Math.round(plan.reverb_wet * 100)}%
+                                                            </span>
+                                                        )}
+                                                        {plan.delay_wet > 0 && (
+                                                            <span className="text-[9px] bg-sky-500/10 text-sky-400 border border-sky-500/20 rounded-full px-2 py-0.5">
+                                                                Delay {Math.round(plan.delay_wet * 100)}%
+                                                            </span>
+                                                        )}
+                                                        {plan.saturation_drive > 0 && (
+                                                            <span className="text-[9px] bg-orange-500/10 text-orange-400 border border-orange-500/20 rounded-full px-2 py-0.5">
+                                                                Saturation {Math.round(plan.saturation_drive * 100)}%
+                                                            </span>
+                                                        )}
+                                                        {plan.stereo_width > 0 && plan.stereo_width !== 1.0 && (
+                                                            <span className="text-[9px] bg-teal-500/10 text-teal-400 border border-teal-500/20 rounded-full px-2 py-0.5">
+                                                                Width {Math.round(plan.stereo_width * 100)}%
+                                                            </span>
+                                                        )}
+                                                        {isOrganic && plan.organic_category && (
+                                                            <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full px-2 py-0.5">
+                                                                🌿 {plan.organic_category}
+                                                            </span>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Reasoning */}
+                                                    {plan.reasoning && (
+                                                        <div className="text-[10px] text-zinc-500 italic leading-relaxed bg-zinc-950/50 rounded-lg px-3 py-2 border border-zinc-800/30">
+                                                            💭 {plan.reasoning}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Master Plan */}
+                        {job.result.brain_report.master_plan && (
+                            <div>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">Master Plan</span>
+                                    <div className="flex-1 h-px bg-amber-500/10" />
+                                </div>
+                                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+                                    <div className="grid grid-cols-2 gap-2 mb-2">
+                                        <div className="bg-zinc-900/60 rounded-lg px-2 py-1.5">
+                                            <div className="text-[8px] text-zinc-600 uppercase">Target LUFS</div>
+                                            <div className="text-sm text-amber-400 font-mono font-bold">{job.result.brain_report.master_plan.target_lufs}</div>
+                                        </div>
+                                        <div className="bg-zinc-900/60 rounded-lg px-2 py-1.5">
+                                            <div className="text-[8px] text-zinc-600 uppercase">Style</div>
+                                            <div className="text-[11px] text-zinc-300 font-mono">{job.result.brain_report.master_plan.master_style}</div>
+                                        </div>
+                                        <div className="bg-zinc-900/60 rounded-lg px-2 py-1.5">
+                                            <div className="text-[8px] text-zinc-600 uppercase">Stereo</div>
+                                            <div className="text-[11px] text-zinc-300 font-mono">{job.result.brain_report.master_plan.stereo_image}</div>
+                                        </div>
+                                        <div className="bg-zinc-900/60 rounded-lg px-2 py-1.5">
+                                            <div className="text-[8px] text-zinc-600 uppercase">Low End</div>
+                                            <div className="text-[11px] text-zinc-300 font-mono">{job.result.brain_report.master_plan.low_end_strategy}</div>
+                                        </div>
+                                    </div>
+                                    {job.result.brain_report.master_plan.reasoning && (
+                                        <div className="text-[10px] text-zinc-500 italic leading-relaxed bg-zinc-950/50 rounded-lg px-3 py-2 border border-zinc-800/30">
+                                            💭 {job.result.brain_report.master_plan.reasoning}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
             {/* 🎛️ Separated Stems — Instrument Detection Visual */}
             {job?.result?.stem_analysis && Object.keys(job.result.stem_analysis).length > 0 && (
                 <Card className="bg-zinc-900/50 border-zinc-800 overflow-hidden">
@@ -1528,6 +1762,127 @@ export default function ReconstructPage() {
                                         );
                                     })}
                                 </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* 🎯 AI Verdict — Honest Quality Assessment */}
+                    {(job?.result?.qc || job?.result?.auto_correction) && (
+                        <Card className="bg-zinc-900/50 border-zinc-800 overflow-hidden">
+                            <CardHeader className="pb-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <CardTitle className="text-lg">🎯 AI Verdict</CardTitle>
+                                        <Badge variant="outline" className="border-violet-500/30 text-violet-400 text-[10px]">
+                                            Honest Assessment
+                                        </Badge>
+                                    </div>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                {/* Overall Grade */}
+                                {(() => {
+                                    const score = job.result?.qc?.overall_score ?? 0;
+                                    const gap = job.result?.auto_correction?.total_gap;
+                                    const passed = job.result?.qc?.passed;
+                                    const passes = job.result?.auto_correction?.pass_number ?? 1;
+                                    const reprocessed = job.result?.auto_correction?.should_reprocess;
+
+                                    let grade: string, gradeColor: string, gradeIcon: string, gradeText: string;
+                                    if (score >= 90) {
+                                        grade = 'EXCELLENT'; gradeColor = 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10';
+                                        gradeIcon = '💎'; gradeText = 'Professional quality — ready for distribution. The AI matched the reference DNA with high fidelity across all 12 dimensions.';
+                                    } else if (score >= 75) {
+                                        grade = 'GOOD'; gradeColor = 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10';
+                                        gradeIcon = '✅'; gradeText = 'Solid reconstruction with room for polish. Core elements are accurately captured. Fine details may differ from reference.';
+                                    } else if (score >= 55) {
+                                        grade = 'NEEDS WORK'; gradeColor = 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+                                        gradeIcon = '⚠️'; gradeText = 'Partial match — the foundation is there but some dimensions deviate significantly from the reference DNA.';
+                                    } else {
+                                        grade = 'CRITICAL GAP'; gradeColor = 'text-red-400 border-red-500/30 bg-red-500/10';
+                                        gradeIcon = '🚨'; gradeText = 'Major divergence from reference. The reconstruction needs fundamental rework in multiple areas.';
+                                    }
+
+                                    return (
+                                        <div className={`rounded-xl border p-4 ${gradeColor}`}>
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-3xl">{gradeIcon}</span>
+                                                    <div>
+                                                        <div className="text-xl font-black tracking-tight">{grade}</div>
+                                                        <div className="text-[10px] opacity-60">
+                                                            {score.toFixed(1)}% overall • {passes > 1 ? `${passes} passes` : '1 pass'}
+                                                            {reprocessed ? ' • self-corrected' : ''}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                {gap !== undefined && gap !== null && (
+                                                    <div className="text-right">
+                                                        <div className="text-[9px] uppercase opacity-60">Gap Score</div>
+                                                        <div className="text-lg font-mono font-bold">{(gap * 100).toFixed(0)}%</div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <p className="text-[11px] leading-relaxed opacity-80">{gradeText}</p>
+                                        </div>
+                                    );
+                                })()}
+
+                                {/* Auto-Correction Details */}
+                                {job.result?.auto_correction && (
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider">
+                                                {job.result.auto_correction.should_reprocess ? '🔄 Self-Corrections Applied' : '✅ No Corrections Needed'}
+                                            </span>
+                                            <div className="flex-1 h-px bg-violet-500/10" />
+                                        </div>
+
+                                        {/* Master Correction */}
+                                        {job.result.auto_correction.master && job.result.auto_correction.master.reasoning && job.result.auto_correction.master.reasoning.length > 0 && (
+                                            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 mb-2">
+                                                <div className="text-[9px] text-amber-400 uppercase font-semibold mb-1">🏚️ Master Chain</div>
+                                                <div className="space-y-1">
+                                                    {job.result.auto_correction.master!.reasoning.map((r, i) => (
+                                                        <div key={i} className="flex items-start gap-2">
+                                                            <span className="text-amber-500/40 text-[9px] mt-0.5">▸</span>
+                                                            <span className="text-[10px] text-zinc-400">{r}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Per-Stem Gaps */}
+                                        {Object.entries(job.result.auto_correction.stem_corrections)
+                                            .filter(([, v]) => v.needs_correction)
+                                            .length > 0 && (
+                                                <div className="space-y-1">
+                                                    {Object.entries(job.result.auto_correction.stem_corrections)
+                                                        .filter(([, v]) => v.needs_correction)
+                                                        .sort(([, a], [, b]) => b.gap_score - a.gap_score)
+                                                        .map(([stem, data]) => (
+                                                            <div key={stem} className="flex items-center gap-2 rounded-lg bg-zinc-900/60 border border-zinc-800/30 px-3 py-2">
+                                                                <div className={`w-2 h-2 rounded-full ${data.gap_score > 0.3 ? 'bg-red-500' : data.gap_score > 0.15 ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                                                                <span className="text-[11px] font-semibold text-zinc-300 capitalize min-w-[60px]">{stem}</span>
+                                                                <div className="flex-1 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                                                                    <div
+                                                                        className={`h-full rounded-full ${data.gap_score > 0.3 ? 'bg-red-500' : data.gap_score > 0.15 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                                                        style={{ width: `${Math.min(data.gap_score * 100, 100)}%` }}
+                                                                    />
+                                                                </div>
+                                                                <span className="text-[10px] font-mono text-zinc-500">{(data.gap_score * 100).toFixed(0)}% gap</span>
+                                                                {data.reasoning?.length > 0 && (
+                                                                    <span className="text-[9px] text-zinc-600 italic truncate max-w-[200px]" title={data.reasoning.join('; ')}>
+                                                                        💭 {data.reasoning[0]}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                </div>
+                                            )}
+                                    </div>
+                                )}
                             </CardContent>
                         </Card>
                     )}
