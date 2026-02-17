@@ -76,6 +76,26 @@ def _load_jobs() -> None:
         except Exception as e:
             print(f"Failed to load jobs: {e}")
 
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively convert numpy types to native Python for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating) or isinstance(obj, float):
+        val = float(obj)
+        if np.isnan(val) or np.isinf(val):
+            return 0.0  # Use 0.0 instead of None to prevent client crashes (e.g. WaveSurfer peaks)
+        return val
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return _sanitize_for_json(obj.tolist())
+    return obj
+
+
 def _save_jobs() -> None:
     """Save all jobs to disk."""
     try:
@@ -275,24 +295,7 @@ async def start_reconstruction(req: ReconstructRequest) -> dict[str, Any]:
     return _reconstruct_jobs[job_id]
 
 
-def _sanitize_for_json(obj: Any) -> Any:
-    """Recursively convert numpy types to native Python for JSON serialization."""
-    if isinstance(obj, dict):
-        return {k: _sanitize_for_json(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_for_json(v) for v in obj]
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.floating) or isinstance(obj, float):
-        val = float(obj)
-        if np.isnan(val) or np.isinf(val):
-            return 0.0  # Use 0.0 instead of None to prevent client crashes (e.g. WaveSurfer peaks)
-        return val
-    if isinstance(obj, np.bool_):
-        return bool(obj)
-    if isinstance(obj, np.ndarray):
-        return _sanitize_for_json(obj.tolist())
-    return obj
+
 
 
 @router.get("/status/{job_id}")
