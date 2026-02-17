@@ -28,6 +28,11 @@ const BarByBar = dynamic(
     { ssr: false, loading: () => <div className="h-40 bg-zinc-900/50 rounded-xl animate-pulse" /> }
 );
 
+const SpectralCompare = dynamic(
+    () => import("@/components/spectral-compare"),
+    { ssr: false, loading: () => <div className="h-48 bg-zinc-900/50 rounded-xl animate-pulse" /> }
+);
+
 /* ── Types (track-agnostic) ──────────────────────────── */
 
 interface StageStatus {
@@ -749,6 +754,15 @@ export default function ReconstructPage() {
             {/* 🎼 Bar-by-Bar Reconstruction */}
             {job && job.status === "completed" && xrayAnalysis && (
                 <BarByBar xrayAnalysis={xrayAnalysis} />
+            )}
+
+            {/* 📊 Spectral Comparison */}
+            {job && job.status === "completed" && job.result && (
+                <SpectralCompare
+                    jobId={job.job_id}
+                    hasOriginal={!!job.result.files?.original}
+                    hasMaster={!!job.result.files?.master}
+                />
             )}
 
             {/* Live Logs Terminal */}

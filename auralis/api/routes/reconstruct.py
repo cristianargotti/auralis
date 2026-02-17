@@ -375,6 +375,82 @@ async def get_audio_file(job_id: str, file_key: str):
     return FileResponse(file_path, media_type="audio/wav")
 
 
+@router.get("/spectrogram/{job_id}/{file_key}")
+async def get_spectrogram(job_id: str, file_key: str):
+    """Generate and return mel spectrogram as PNG image."""
+    if job_id not in _reconstruct_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = _reconstruct_jobs[job_id]
+    project_id = job["project_id"]
+    project_dir = Path("/app/projects") / project_id
+
+    file_map = {
+        "original": "original.wav",
+        "master": "master.wav",
+        "mix": "mix.wav",
+    }
+
+    if file_key not in file_map:
+        raise HTTPException(status_code=400, detail="Invalid file key (original, master, mix)")
+
+    file_path = project_dir / file_map[file_key]
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    # Check for cached spectrogram
+    cache_path = project_dir / f"spectrogram_{file_key}.png"
+    if cache_path.exists():
+        return FileResponse(cache_path, media_type="image/png")
+
+    try:
+        png_path = await asyncio.to_thread(_generate_spectrogram, str(file_path), str(cache_path))
+        return FileResponse(png_path, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Spectrogram generation failed: {e}")
+
+
+def _generate_spectrogram(audio_path: str, output_path: str) -> str:
+    """Generate mel spectrogram PNG — runs in thread pool."""
+    import librosa
+    import librosa.display
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Load at reduced SR for efficiency (22kHz is fine for spectrograms)
+    y, sr = librosa.load(audio_path, sr=22050, mono=True)
+
+    # Compute mel spectrogram
+    S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=sr // 2)
+    S_dB = librosa.power_to_db(S, ref=np.max)
+
+    # Create figure with dark theme
+    fig, ax = plt.subplots(1, 1, figsize=(16, 4), dpi=100)
+    fig.patch.set_facecolor("#09090b")
+    ax.set_facecolor("#09090b")
+
+    librosa.display.specshow(
+        S_dB, sr=sr, x_axis="time", y_axis="mel",
+        ax=ax, cmap="magma", vmin=-60, vmax=0,
+    )
+
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    ax.tick_params(colors="#71717a", labelsize=7)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    fig.tight_layout(pad=0.5)
+    fig.savefig(output_path, dpi=100, facecolor="#09090b", bbox_inches="tight")
+    plt.close(fig)
+
+    # Free memory
+    del y, S, S_dB
+
+    return output_path
+
 
 @router.get("/jobs")
 async def list_jobs() -> list[dict[str, Any]]:
