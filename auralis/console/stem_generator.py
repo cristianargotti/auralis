@@ -33,6 +33,7 @@ from auralis.grid.midi import (
 from auralis.hands.synth import (
     PRESETS,
     VoiceConfig,
+    get_patch_for_stem,
     render_midi_to_audio,
     save_audio,
 )
@@ -488,14 +489,16 @@ def generate_bass_stem(
     )
     note_events = pattern_to_note_events(pattern, bpm)
 
-    # Select voice — brain-guided or BPM fallback
-    if stem_plan and getattr(stem_plan, 'patch', ''):
-        patch_name = stem_plan.patch
-        logger.info("stem_generator.bass_brain_patch", patch=patch_name)
-    else:
-        patch_name = "bass_808" if bpm < 130 else "acid_303"
-    patch = PRESETS.get(patch_name)
-    voice = patch.voice if patch else VoiceConfig()
+    # Select voice — musically intelligent patch selection
+    style_hint = ""
+    if stem_plan:
+        style_hint = getattr(stem_plan, 'style', '') or getattr(stem_plan, 'patch', '') or ''
+    patch = get_patch_for_stem(
+        stem_name="bass", style=style_hint, bpm=bpm,
+        synth_patch=getattr(stem_plan, 'patch', '') if stem_plan else '',
+    )
+    logger.info("stem_generator.bass_patch", patch=patch.name, style=style_hint)
+    voice = patch.voice
 
     audio = render_midi_to_audio(note_events, sr=sr, voice=voice)
 
@@ -525,14 +528,16 @@ def generate_pad_stem(
     )
     note_events = pattern_to_note_events(pattern, bpm)
 
-    # Select voice — brain-guided or BPM fallback
-    if stem_plan and getattr(stem_plan, 'patch', ''):
-        patch_name = stem_plan.patch
-        logger.info("stem_generator.pad_brain_patch", patch=patch_name)
-    else:
-        patch_name = "pad_warm" if bpm < 125 else "supersaw"
-    patch = PRESETS.get(patch_name)
-    voice = patch.voice if patch else VoiceConfig()
+    # Select voice — musically intelligent patch selection
+    style_hint = ""
+    if stem_plan:
+        style_hint = getattr(stem_plan, 'style', '') or getattr(stem_plan, 'patch', '') or ''
+    patch = get_patch_for_stem(
+        stem_name="other", style=style_hint, bpm=bpm,
+        synth_patch=getattr(stem_plan, 'patch', '') if stem_plan else '',
+    )
+    logger.info("stem_generator.pad_patch", patch=patch.name, style=style_hint)
+    voice = patch.voice
 
     audio = render_midi_to_audio(note_events, sr=sr, voice=voice)
 
@@ -615,9 +620,22 @@ def generate_stem(
                         if len(audio_data) > target_samples:
                             audio_data = audio_data[:target_samples]
                         elif len(audio_data) < target_samples:
-                            # Loop the organic sample
-                            repeats = (target_samples // len(audio_data)) + 1
-                            audio_data = np.tile(audio_data, repeats)[:target_samples]
+                            # Loop with crossfade to avoid clicks at joints
+                            xfade = min(int(0.05 * sr), len(audio_data) // 4)  # 50ms or 25% of sample
+                            looped = np.zeros(target_samples, dtype=np.float64)
+                            pos = 0
+                            while pos < target_samples:
+                                chunk_len = min(len(audio_data), target_samples - pos)
+                                looped[pos:pos + chunk_len] += audio_data[:chunk_len]
+                                # Crossfade at the joint
+                                if pos > 0 and xfade > 0:
+                                    fade_len = min(xfade, pos, chunk_len)
+                                    fade_in = np.linspace(0, 1, fade_len)
+                                    fade_out = np.linspace(1, 0, fade_len)
+                                    looped[pos:pos + fade_len] *= fade_in
+                                    looped[pos - fade_len:pos] *= fade_out
+                                pos += len(audio_data) - xfade  # overlap by xfade
+                            audio_data = looped
 
                         out_path = output_dir / f"{stem_name}_organic.wav"
                         sf.write(str(out_path), audio_data, sr, subtype="FLOAT")
@@ -695,10 +713,20 @@ def generate_stem(
 
         elif stem_name == "bass":
             style = decision.pattern_style or "simple"
-            audio = generate_bass_stem(bpm, key, scale, duration_s, style, sr)
+            audio = generate_bass_stem(bpm, key, scale, duration_s, style, sr, stem_plan=stem_plan)
 
         elif stem_name == "other":
             audio = generate_pad_stem(bpm, key, scale, duration_s, sr, stem_plan=stem_plan)
+
+        elif stem_name == "vocals":
+            # Vocals can't be synthesized — log clearly and return None
+            # The AI path above is the only route for vocal generation
+            logger.warning(
+                "stem_generator.vocals_no_synth_fallback",
+                msg="Vocal synthesis not possible — AI generation was the only path. "
+                    "Consider adding more reference tracks or checking Replicate API.",
+            )
+            return None
 
         else:
             logger.warning("stem_generator.unsupported", stem=stem_name)

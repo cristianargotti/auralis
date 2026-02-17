@@ -157,19 +157,31 @@ def _select_pattern_style(stem_name: str, bpm: float) -> str:
 
 
 def _select_synth_patch(stem_name: str, bpm: float) -> str:
-    """Pick a synth preset for generation."""
+    """Pick a synth preset for generation — narrative-aware.
+
+    Thinks about what the track NEEDS at this BPM:
+      - Slow grooves need weight (808, warm pads)
+      - Mid-tempo needs character (acid, keys, plucks)
+      - High-energy needs tension (reese, dark pads, supersaw)
+    """
     if stem_name == "bass":
-        if bpm >= 130:
-            return "acid_303"
+        if bpm > 150:
+            return "bass_reese"   # DnB energy — dark, evolving tension
+        elif bpm >= 130:
+            return "acid_303"     # Techno drive — squelchy, rhythmic
         else:
-            return "bass_808"
+            return "bass_808"     # Deep groove — gravitational weight
     elif stem_name == "drums":
-        return "drums_fm"  # Special: handled by drum generator
+        return ""  # Drums use organic/AI generation, not synth presets
     elif stem_name == "other":
-        if bpm >= 125:
-            return "supersaw"
+        if bpm > 140:
+            return "pad_dark"     # High-energy = dark atmosphere, tension
+        elif bpm >= 125:
+            return "supersaw"     # Peak-time = big wide leads
+        elif bpm >= 110:
+            return "pluck"        # Mid-tempo = melodic identity
         else:
-            return "pad_warm"
+            return "pad_warm"     # Slow = emotional warmth
     return "pluck"
 
 

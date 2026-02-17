@@ -155,8 +155,11 @@ def _separate_mel_roformer(
 
     # Select model — vocals vs general
     if model_variant == "mel_roformer_vocals":
+        # Vocal-optimized: 11.4 dB SDR on vocals specifically
         model_file = "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt"
     else:
+        # General purpose: 9.96 dB SDR average across all stems
+        # NOTE: When a dedicated 4-stem general model is released, update here
         model_file = "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt"
 
     if progress_callback:
