@@ -1,0 +1,410 @@
+Deploy to EC2	Set up job	﻿2026-02-16T23:36:06.9984966Z Current runner version: '2.331.0'
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0026111Z ##[group]Runner Image Provisioner
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0028245Z Hosted Compute Agent
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0030138Z Version: 20260123.484
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0031987Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0033860Z Build Date: 2026-01-23T19:41:17Z
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0035672Z Worker ID: {c27dcd6c-09d4-4b30-8e8d-23b65fe42a1c}
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0037432Z Azure Region: westus
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0039103Z ##[endgroup]
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0041977Z ##[group]Operating System
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0043458Z Ubuntu
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0044950Z 24.04.3
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0046392Z LTS
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0047793Z ##[endgroup]
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0049715Z ##[group]Runner Image
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0051486Z Image: ***-24.04
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0053027Z Version: 20260209.23.1
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0055826Z Included Software: https://github.com/actions/runner-images/blob/***24/20260209.23/images/***/Ubuntu2404-Readme.md
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0059609Z Image Release: https://github.com/actions/runner-images/releases/tag/***24%2F20260209.23
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0061839Z ##[endgroup]
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0064719Z ##[group]GITHUB_TOKEN Permissions
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0068103Z Contents: read
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0070022Z Metadata: read
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0071437Z Packages: read
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0072927Z ##[endgroup]
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0076735Z Secret source: Actions
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0078899Z Prepare workflow directory
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0753906Z Prepare all required actions
+Deploy to EC2	Set up job	2026-02-16T23:36:07.0813612Z Getting action download info
+Deploy to EC2	Set up job	2026-02-16T23:36:07.6140619Z Download action repository 'aws-actions/configure-aws-credentials@v4' (SHA:7474bc4690e29a8392af63c5b98e7449536d5c3a)
+Deploy to EC2	Set up job	2026-02-16T23:36:08.2291930Z Download action repository 'appleboy/ssh-action@v1' (SHA:0ff4204d59e8e51228ff73bce53f80d53301dee2)
+Deploy to EC2	Set up job	2026-02-16T23:36:08.9038628Z Complete job name: Deploy to EC2
+Deploy to EC2	🔑 Configure AWS credentials	﻿2026-02-16T23:36:08.9976687Z ##[group]Run aws-actions/configure-aws-credentials@v4
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9979198Z with:
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9980791Z   aws-access-key-id: ***
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9982523Z   aws-secret-access-key: ***
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9983911Z   aws-region: us-east-1
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9985240Z   audience: sts.amazonaws.com
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9986641Z   output-env-credentials: true
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9988294Z env:
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9989636Z   SG_ID: sg-0e99c64ba4d5840d6
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9991011Z   AWS_REGION: us-east-1
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:08.9992321Z ##[endgroup]
+Deploy to EC2	🔑 Configure AWS credentials	2026-02-16T23:36:09.5119197Z Proceeding with IAM user credentials
+Deploy to EC2	🌐 Open SSH for this runner	﻿2026-02-16T23:36:09.5411438Z ##[group]Run RUNNER_IP=$(curl -s https://checkip.amazonaws.com)
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5413664Z [36;1mRUNNER_IP=$(curl -s https://checkip.amazonaws.com)[0m
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5415559Z [36;1mecho "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV[0m
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5417322Z [36;1maws ec2 authorize-security-group-ingress \[0m
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5419274Z [36;1m  --group-id sg-0e99c64ba4d5840d6 \[0m
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5420864Z [36;1m  --protocol tcp --port 22 \[0m
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5422339Z [36;1m  --cidr "${RUNNER_IP}/32" \[0m
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5424689Z [36;1m  --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=source,Value=github-actions}]" || true[0m
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5427131Z [36;1mecho "Opened SSH for $RUNNER_IP"[0m
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5483113Z shell: /usr/bin/bash -e {0}
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5484457Z env:
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5485583Z   SG_ID: sg-0e99c64ba4d5840d6
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5486899Z   AWS_REGION: us-east-1
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5488178Z   AWS_DEFAULT_REGION: us-east-1
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5490275Z   AWS_ACCESS_KEY_ID: ***
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5491903Z   AWS_SECRET_ACCESS_KEY: ***
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:09.5493201Z ##[endgroup]
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8861458Z {
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8874441Z     "Return": true,
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8875667Z     "SecurityGroupRules": [
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8876569Z         {
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8877658Z             "SecurityGroupRuleId": "sgr-0cd56b3711cd47f66",
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8879734Z             "GroupId": "sg-0e99c64ba4d5840d6",
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8880666Z             "GroupOwnerId": "643672119893",
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8881746Z             "IsEgress": false,
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8882932Z             "IpProtocol": "tcp",
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8883882Z             "FromPort": 22,
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8884751Z             "ToPort": 22,
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8888152Z             "CidrIpv4": "52.234.42.40/32",
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8889916Z             "Tags": [
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8890447Z                 {
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8891039Z                     "Key": "source",
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8891821Z                     "Value": "github-actions"
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8892452Z                 }
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8892957Z             ],
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8893839Z             "SecurityGroupRuleArn": "arn:aws:ec2:us-east-1:643672119893:security-group-rule/sgr-0cd56b3711cd47f66"
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8894817Z         }
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8895317Z     ]
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:11.8895796Z }
+Deploy to EC2	🌐 Open SSH for this runner	2026-02-16T23:36:12.0251719Z Opened SSH for 52.234.42.40
+Deploy to EC2	🚀 Deploy via SSH	﻿2026-02-16T23:36:12.0470966Z ##[group]Run appleboy/ssh-action@v1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0471462Z with:
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0471971Z   host: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0472344Z   username: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0479626Z   key: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0480734Z   script: set -e
+Deploy to EC2	🚀 Deploy via SSH	cd ~/auralis
+Deploy to EC2	🚀 Deploy via SSH	
+Deploy to EC2	🚀 Deploy via SSH	echo "📥 Pulling latest code..."
+Deploy to EC2	🚀 Deploy via SSH	git fetch origin
+Deploy to EC2	🚀 Deploy via SSH	git reset --hard origin/main
+Deploy to EC2	🚀 Deploy via SSH	
+Deploy to EC2	🚀 Deploy via SSH	echo "🏗️ Rebuilding containers..."
+Deploy to EC2	🚀 Deploy via SSH	docker compose down --remove-orphans
+Deploy to EC2	🚀 Deploy via SSH	docker compose up -d --build
+Deploy to EC2	🚀 Deploy via SSH	
+Deploy to EC2	🚀 Deploy via SSH	echo "✅ Deploy complete!"
+Deploy to EC2	🚀 Deploy via SSH	docker compose ps
+Deploy to EC2	🚀 Deploy via SSH	
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0481953Z   port: 22
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0482329Z   protocol: tcp
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0482676Z   timeout: 30s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0483018Z   command_timeout: 10m
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0483382Z   proxy_port: 22
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0483735Z   proxy_protocol: tcp
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0484097Z   proxy_timeout: 30s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0484465Z   curl_insecure: false
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0484830Z   capture_stdout: false
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0485220Z env:
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0485554Z   SG_ID: sg-0e99c64ba4d5840d6
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0486004Z   AWS_REGION: us-east-1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0486381Z   AWS_DEFAULT_REGION: us-east-1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0486819Z   AWS_ACCESS_KEY_ID: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0487297Z   AWS_SECRET_ACCESS_KEY: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0487686Z   RUNNER_IP: 52.234.42.40
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0488055Z ##[endgroup]
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0567463Z ##[group]Run echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0568043Z [36;1mecho "$GITHUB_ACTION_PATH" >> $GITHUB_PATH[0m
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0623475Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0624007Z env:
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0624362Z   SG_ID: sg-0e99c64ba4d5840d6
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0624760Z   AWS_REGION: us-east-1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0625136Z   AWS_DEFAULT_REGION: us-east-1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0625680Z   AWS_ACCESS_KEY_ID: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0626169Z   AWS_SECRET_ACCESS_KEY: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0626691Z   RUNNER_IP: 52.234.42.40
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0627246Z   GITHUB_ACTION_PATH: /home/runner/work/_actions/appleboy/ssh-action/v1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0627787Z ##[endgroup]
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0765648Z ##[group]Run entrypoint.sh
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0766100Z [36;1mentrypoint.sh[0m
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0821004Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0821544Z env:
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0821890Z   SG_ID: sg-0e99c64ba4d5840d6
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0822291Z   AWS_REGION: us-east-1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0822662Z   AWS_DEFAULT_REGION: us-east-1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0823203Z   AWS_ACCESS_KEY_ID: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0823692Z   AWS_SECRET_ACCESS_KEY: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0824084Z   RUNNER_IP: 52.234.42.40
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0824571Z   GITHUB_ACTION_PATH: /home/runner/work/_actions/appleboy/ssh-action/v1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0825145Z   INPUT_HOST: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0825495Z   INPUT_PORT: 22
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0825847Z   INPUT_PROTOCOL: tcp
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0826238Z   INPUT_USERNAME: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0826800Z   INPUT_PASSWORD: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0827152Z   INPUT_PASSPHRASE: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0834481Z   INPUT_KEY: ***
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0834855Z   INPUT_KEY_PATH: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0835213Z   INPUT_FINGERPRINT: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0835577Z   INPUT_PROXY_HOST: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0835936Z   INPUT_PROXY_PORT: 22
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0836305Z   INPUT_PROXY_USERNAME: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0836680Z   INPUT_PROXY_PASSWORD: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0837054Z   INPUT_PROXY_PASSPHRASE: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0837425Z   INPUT_PROXY_KEY: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0837780Z   INPUT_PROXY_KEY_PATH: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0838146Z   INPUT_PROXY_FINGERPRINT: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0838703Z   INPUT_TIMEOUT: 30s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0839075Z   INPUT_PROXY_TIMEOUT: 30s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0839453Z   INPUT_COMMAND_TIMEOUT: 10m
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0840602Z   INPUT_SCRIPT: set -e
+Deploy to EC2	🚀 Deploy via SSH	cd ~/auralis
+Deploy to EC2	🚀 Deploy via SSH	
+Deploy to EC2	🚀 Deploy via SSH	echo "📥 Pulling latest code..."
+Deploy to EC2	🚀 Deploy via SSH	git fetch origin
+Deploy to EC2	🚀 Deploy via SSH	git reset --hard origin/main
+Deploy to EC2	🚀 Deploy via SSH	
+Deploy to EC2	🚀 Deploy via SSH	echo "🏗️ Rebuilding containers..."
+Deploy to EC2	🚀 Deploy via SSH	docker compose down --remove-orphans
+Deploy to EC2	🚀 Deploy via SSH	docker compose up -d --build
+Deploy to EC2	🚀 Deploy via SSH	
+Deploy to EC2	🚀 Deploy via SSH	echo "✅ Deploy complete!"
+Deploy to EC2	🚀 Deploy via SSH	docker compose ps
+Deploy to EC2	🚀 Deploy via SSH	
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0842102Z   INPUT_SCRIPT_FILE: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0842465Z   INPUT_ENVS: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0842808Z   INPUT_ENVS_FORMAT: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0843161Z   INPUT_DEBUG: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0843499Z   INPUT_ALL_ENVS: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0843846Z   INPUT_REQUEST_PTY: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0844206Z   INPUT_USE_INSECURE_CIPHER: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0844586Z   INPUT_CIPHER: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0844931Z   INPUT_PROXY_USE_INSECURE_CIPHER: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0845338Z   INPUT_PROXY_CIPHER: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0845694Z   INPUT_SYNC: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0846046Z   INPUT_CAPTURE_STDOUT: false
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0846440Z   INPUT_CURL_INSECURE: false
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0846819Z   DRONE_SSH_VERSION: 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0847174Z ##[endgroup]
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.0991252Z Downloading drone-ssh-1.8.2-linux-amd64 from https://github.com/appleboy/drone-ssh/releases/download/v1.8.2
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.4113405Z ======= CLI Version Information =======
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.4150670Z Drone SSH version 1.8.2
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:12.4162155Z =======================================
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:13.6153139Z 📥 Pulling latest code...
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:13.9867762Z From github.com:cristianargotti/auralis
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:13.9869689Z    ebbbd67..2a17b98  main       -> origin/main
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:14.0012299Z HEAD is now at 2a17b98 feat: Interactive Waveform X-Ray (Visualizer)
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:14.0016318Z 🏗️ Rebuilding containers...
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:14.0904970Z  Container auralis-caddy-1 Stopping 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:14.9171933Z  Container auralis-caddy-1 Stopped 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:14.9175665Z  Container auralis-caddy-1 Removing 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:14.9459802Z  Container auralis-caddy-1 Removed 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:14.9460637Z  Container auralis-web-1 Stopping 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.1070650Z  Container auralis-web-1 Stopped 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.1075511Z  Container auralis-web-1 Removing 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.1305147Z  Container auralis-web-1 Removed 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.1306086Z  Container auralis-api-1 Stopping 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.4812773Z  Container auralis-api-1 Stopped 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.4813711Z  Container auralis-api-1 Removing 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.5812730Z  Container auralis-api-1 Removed 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.5818294Z  Network auralis_default Removing 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.7206844Z  Network auralis_default Removed 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.8864466Z  Image auralis-api Building 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.8865337Z  Image auralis-web Building 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:15.9799650Z #1 [internal] load local bake definitions
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.0814388Z #1 reading from stdin 881B done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.0815008Z #1 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.0815566Z #2 [api internal] load build definition from Dockerfile.api
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.0816271Z #2 transferring dockerfile: 797B done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.0816813Z #2 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.0817343Z #3 [web internal] load build definition from Dockerfile.web
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.0818421Z #3 transferring dockerfile: 698B done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.2084553Z #3 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.2085184Z #4 [api internal] load metadata for ghcr.io/astral-sh/uv:latest
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.2085781Z #4 DONE 0.1s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.2086248Z #5 [web internal] load metadata for docker.io/library/node:22-alpine
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3196750Z #5 DONE 0.1s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3197479Z #6 [api internal] load metadata for docker.io/library/python:3.12-slim
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3198080Z #6 DONE 0.2s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3198448Z #7 [api internal] load .dockerignore
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3199173Z #7 transferring context: 2B done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3199584Z #7 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3199938Z #8 [web internal] load build context
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3200362Z #8 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3200712Z #9 [api internal] load build context
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3201137Z #9 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3201923Z #10 [web builder 1/6] FROM docker.io/library/node:22-alpine@sha256:e4bf2a82ad0a4037d28035ae71529873c069b13eb0455466ae0bc13363826e34
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3203234Z #10 resolve docker.io/library/node:22-alpine@sha256:e4bf2a82ad0a4037d28035ae71529873c069b13eb0455466ae0bc13363826e34 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3204484Z #10 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3205669Z #11 [api] FROM ghcr.io/astral-sh/uv:latest@sha256:7a88d4c4e6f44200575000638453a5a381db0ae31ad5c3a51b14f8687c9d93a3
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.3206986Z #11 resolve ghcr.io/astral-sh/uv:latest@sha256:7a88d4c4e6f44200575000638453a5a381db0ae31ad5c3a51b14f8687c9d93a3
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4454287Z #11 resolve ghcr.io/astral-sh/uv:latest@sha256:7a88d4c4e6f44200575000638453a5a381db0ae31ad5c3a51b14f8687c9d93a3 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4455602Z #11 DONE 0.1s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4456669Z #12 [api base  1/10] FROM docker.io/library/python:3.12-slim@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4457645Z #12 resolve docker.io/library/python:3.12-slim@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4458298Z #12 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4458949Z #8 [web internal] load build context
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4459617Z #8 transferring context: 676.18kB 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4460248Z #8 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4460956Z #9 [api internal] load build context
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4462309Z #9 transferring context: 516.95kB 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4462953Z #9 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4463449Z #13 [web builder 2/6] WORKDIR /app
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4464029Z #13 CACHED
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4464510Z #14 [api base  4/10] WORKDIR /app
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4465078Z #14 CACHED
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4466188Z #15 [api base  2/10] RUN apt-get update && apt-get install -y --no-install-recommends     libsndfile1 ffmpeg &&     rm -rf /var/lib/apt/lists/*
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4467398Z #15 CACHED
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4467843Z #16 [api base  3/10] COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4468326Z #16 CACHED
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4468885Z #17 [api base  5/10] COPY pyproject.toml uv.lock ./
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4469295Z #17 CACHED
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4469766Z #18 [api base  6/10] RUN uv sync --frozen --no-dev --no-install-project     --extra ml --extra audio
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4470281Z #18 CACHED
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4470647Z #19 [web builder 3/6] COPY web/package.json web/package-lock.json ./
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4471067Z #19 DONE 0.1s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.4471356Z #20 [api base  7/10] COPY auralis/ auralis/
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.5952583Z #20 DONE 0.1s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.5953232Z #21 [api base  8/10] COPY scripts/ scripts/
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.5953846Z #21 DONE 0.1s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.5954193Z #22 [api base  9/10] COPY README.md ./
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.5954604Z #22 DONE 0.1s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:16.5954934Z #23 [web builder 4/6] RUN npm ci
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.7174155Z #23 ...
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.7175109Z #24 [api base 10/10] RUN uv sync --frozen --no-dev     --extra ml --extra audio
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.7175960Z #24 0.353    Building auralis @ file:///app
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.7176649Z #24 0.892       Built auralis @ file:///app
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.7177859Z #24 0.894 Prepared 1 package in 542ms
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.7178738Z #24 0.896 Installed 1 package in 1ms
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.7179465Z #24 0.896  + auralis==0.1.0 (from file:///app)
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.7180226Z #24 DONE 1.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.8095094Z #25 [api] exporting to image
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.8095894Z #25 exporting layers 0.2s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.8096759Z #25 exporting manifest sha256:f834ae96e4c63f55ba3797db02cb078f71d8490e32fce3fd15a1f2062b33ced9
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.9199013Z #25 exporting manifest sha256:f834ae96e4c63f55ba3797db02cb078f71d8490e32fce3fd15a1f2062b33ced9 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.9201100Z #25 exporting config sha256:4c257ee403dc3dc87eb0e358597898ec13031fd339ed99b2e6dce77a0ffec80a 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.9204872Z #25 exporting attestation manifest sha256:2cbf91dc16d150fb5c492071fd22b42ad4e693463b717bcfa68c3e279644c863 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.9207388Z #25 exporting manifest list sha256:0d282472d26fff7069c7dbbd51a19e80f3bac580086a70319f67c27623c6037c 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:17.9209776Z #25 naming to docker.io/library/auralis-api:latest
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:18.0483268Z #25 naming to docker.io/library/auralis-api:latest done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:18.0484402Z #25 unpacking to docker.io/library/auralis-api:latest 0.1s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:18.2176543Z #25 DONE 0.5s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:18.2177323Z #26 [api] resolving provenance for metadata file
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:18.3795855Z #26 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:18.3796653Z #23 [web builder 4/6] RUN npm ci
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:23.2010823Z #23 6.748 npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.7324310Z #23 19.28 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.7325283Z #23 19.28 added 699 packages, and audited 700 packages in 19s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.7326083Z #23 19.28 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.7326557Z #23 19.28 235 packages are looking for funding
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.7327187Z #23 19.28   run `npm fund` for details
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.8927805Z #23 19.28 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.8928657Z #23 19.28 found 0 vulnerabilities
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.8929254Z #23 19.28 npm notice
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.8929945Z #23 19.28 npm notice New major version of npm available! 10.9.4 -> 11.10.0
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.8930718Z #23 19.28 npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.10.0
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.8931330Z #23 19.28 npm notice To update run: npm install -g npm@11.10.0
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:35.8931762Z #23 19.28 npm notice
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:36.1264884Z #23 DONE 19.7s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:36.2885536Z #27 [web builder 5/6] COPY web/ ./
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:36.4955964Z #27 DONE 0.4s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:36.6521742Z #28 [web builder 6/6] RUN npm run build
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:37.0578351Z #28 0.556 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:37.0579060Z #28 0.556 > web@0.1.0 build
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:37.0579435Z #28 0.556 > next build
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:37.0579729Z #28 0.556 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:38.3265495Z #28 1.825 Attention: Next.js now collects completely anonymous telemetry regarding usage.
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:38.4421019Z #28 1.825 This information is used to shape Next.js' roadmap and prioritize features.
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:38.4423983Z #28 1.826 You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:38.4425286Z #28 1.826 https://nextjs.org/telemetry
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:38.4425890Z #28 1.826 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:38.4426655Z #28 1.839 ▲ Next.js 16.1.6 (Turbopack)
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:38.4427241Z #28 1.839 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:38.4427676Z #28 1.941   Creating an optimized production build ...
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:52.4525823Z #28 15.91 ✓ Compiled successfully in 13.2s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:36:52.6611464Z #28 16.01   Running TypeScript ...
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:01.3452927Z #28 24.84   Collecting page data using 1 worker ...
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:02.5322359Z #28 26.03   Generating static pages using 1 worker (0/14) ...
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:02.9456880Z #28 26.44   Generating static pages using 1 worker (3/14) 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.0840236Z #28 26.45   Generating static pages using 1 worker (6/14) 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.0841665Z #28 26.58   Generating static pages using 1 worker (10/14) 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.2448093Z #28 26.58 ✓ Generating static pages using 1 worker (14/14) in 553.1ms
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.2449767Z #28 26.59   Finalizing page optimization ...
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.7480831Z #28 27.25 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9066436Z #28 27.25 Route (app)
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9067490Z #28 27.25 ┌ ○ /
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9068255Z #28 27.25 ├ ○ /_not-found
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9069396Z #28 27.25 ├ ○ /architecture
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9070269Z #28 27.25 ├ ○ /chat
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9071078Z #28 27.25 ├ ○ /creator
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9072087Z #28 27.25 ├ ○ /deconstruct
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9072995Z #28 27.25 ├ ○ /login
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9073842Z #28 27.25 ├ ○ /master
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9074701Z #28 27.25 ├ ○ /mixer
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9075322Z #28 27.25 ├ ○ /qc
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9075820Z #28 27.25 ├ ○ /reconstruct
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9076224Z #28 27.25 └ ○ /studio
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9076496Z #28 27.25 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9076798Z #28 27.25 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9077155Z #28 27.25 ○  (Static)  prerendered as static content
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:03.9077924Z #28 27.25 
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:04.1543526Z #28 DONE 27.6s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:13.1766724Z #29 [web runner 3/5] COPY --from=builder /app/.next/standalone ./
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:13.6569409Z #29 DONE 0.5s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:13.7773101Z #30 [web runner 4/5] COPY --from=builder /app/.next/static ./.next/static
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:13.7774356Z #30 DONE 0.1s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:13.7775012Z #31 [web runner 5/5] COPY --from=builder /app/public ./public
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:13.7775680Z #31 DONE 0.0s
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:13.9480840Z #32 [web] exporting to image
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:13.9481697Z #32 exporting layers
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.1011548Z #32 exporting layers 3.3s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.1917370Z #32 exporting manifest sha256:4089c6c443b1c6ac3281d909afc984893ecee1e548b3c842ed4a265da9904f12 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.1926710Z #32 exporting config sha256:f7dcdfb8140f7c270fe699721141a343b2431057fb72dc05695c51c7361240d4 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.1928151Z #32 exporting attestation manifest sha256:e845125f1bb74d9a6ab16c806dfa24072c886d033035c434801af7e5818612c2 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.1930017Z #32 exporting manifest list sha256:caa51f2ffacbd5e003aba03c282bcbfd2ac28dfea9896eee39fe1c66dce727e6 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.1931184Z #32 naming to docker.io/library/auralis-web:latest done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.1932020Z #32 unpacking to docker.io/library/auralis-web:latest
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.3546366Z #32 unpacking to docker.io/library/auralis-web:latest 0.0s done
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.3549702Z #32 ERROR: failed to prepare extraction snapshot "extract-169888051-cKNi sha256:835aff9df51e846f76dc07be7f39920533e9e8afbfe1c36bde041f06b3472550": parent snapshot sha256:b2049661069bbec30b820638953bf59af40ed3976ae02ebf769f6bcca91135d7 does not exist: not found
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.4083572Z ------
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.4084315Z  > [web] exporting to image:
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.4085046Z ------
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.4268034Z target web: failed to solve: failed to prepare extraction snapshot "extract-169888051-cKNi sha256:835aff9df51e846f76dc07be7f39920533e9e8afbfe1c36bde041f06b3472550": parent snapshot sha256:b2049661069bbec30b820638953bf59af40ed3976ae02ebf769f6bcca91135d7 does not exist: not found
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.4453130Z 2026/02/16 23:37:17 Process exited with status 1
+Deploy to EC2	🚀 Deploy via SSH	2026-02-16T23:37:17.4475790Z ##[error]Process completed with exit code 1.
+Deploy to EC2	🔒 Revoke SSH access	﻿2026-02-16T23:37:17.4561719Z ##[group]Run aws ec2 revoke-security-group-ingress \
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4562240Z [36;1maws ec2 revoke-security-group-ingress \[0m
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4562664Z [36;1m  --group-id sg-0e99c64ba4d5840d6 \[0m
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4563045Z [36;1m  --protocol tcp --port 22 \[0m
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4563411Z [36;1m  --cidr "${RUNNER_IP}/32" || true[0m
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4563778Z [36;1mecho "Revoked SSH for $RUNNER_IP"[0m
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4611950Z shell: /usr/bin/bash -e {0}
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4612275Z env:
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4612550Z   SG_ID: sg-0e99c64ba4d5840d6
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4613055Z   AWS_REGION: us-east-1
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4613365Z   AWS_DEFAULT_REGION: us-east-1
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4613935Z   AWS_ACCESS_KEY_ID: ***
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4614348Z   AWS_SECRET_ACCESS_KEY: ***
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4614661Z   RUNNER_IP: 52.234.42.40
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:17.4614951Z ##[endgroup]
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9494365Z {
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9496568Z     "Return": true,
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9499647Z     "RevokedSecurityGroupRules": [
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9500246Z         {
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9500741Z             "SecurityGroupRuleId": "sgr-0cd56b3711cd47f66",
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9501374Z             "GroupId": "sg-0e99c64ba4d5840d6",
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9501928Z             "IsEgress": false,
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9502416Z             "IpProtocol": "tcp",
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9502930Z             "FromPort": 22,
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9503387Z             "ToPort": 22,
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9503853Z             "CidrIpv4": "52.234.42.40/32"
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9504386Z         }
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9504755Z     ]
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:18.9505124Z }
+Deploy to EC2	🔒 Revoke SSH access	2026-02-16T23:37:19.0774078Z Revoked SSH for 52.234.42.40
+Deploy to EC2	Post 🔑 Configure AWS credentials	﻿2026-02-16T23:37:19.0878769Z Post job cleanup.
+Deploy to EC2	Complete job	﻿2026-02-16T23:37:19.2217125Z Cleaning up orphan processes

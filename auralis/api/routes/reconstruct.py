@@ -47,13 +47,29 @@ class ReconstructRequest(BaseModel):
 JOBS_FILE = settings.projects_dir / "jobs.json"
 
 def _load_jobs() -> None:
-    """Load jobs from disk on startup."""
+    """Load jobs from disk on startup.
+
+    Any jobs left in 'running' state are orphaned (the asyncio task died
+    when the container restarted) — mark them as failed so the frontend
+    stops polling and the user can re-submit.
+    """
     global _reconstruct_jobs
     if JOBS_FILE.exists():
         try:
             data = json.loads(JOBS_FILE.read_text())
+            orphaned = 0
+            for jid, job in data.items():
+                if job.get("status") == "running":
+                    job["status"] = "failed"
+                    job["error"] = "Server restarted — please re-upload your track"
+                    job.setdefault("logs", []).append({
+                        "timestamp": datetime.now().isoformat(),
+                        "level": "error",
+                        "message": "Job interrupted by server restart",
+                    })
+                    orphaned += 1
             _reconstruct_jobs = data
-            print(f"Loaded {len(_reconstruct_jobs)} jobs from {JOBS_FILE}")
+            print(f"Loaded {len(_reconstruct_jobs)} jobs from {JOBS_FILE} ({orphaned} orphaned → failed)")
         except Exception as e:
             print(f"Failed to load jobs: {e}")
 
@@ -69,6 +85,7 @@ def _save_jobs() -> None:
 
 # Load immediately on import (module level)
 _load_jobs()
+_save_jobs()  # persist any orphan→failed corrections
 
 
 def _log(job: dict[str, Any], msg: str, level: str = "info") -> None:

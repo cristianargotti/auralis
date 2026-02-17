@@ -10,7 +10,7 @@ on:
       container:
         description: "Container name"
         required: false
-        default: "auralis-api"
+        default: "auralis-api-1"
 
 env:
   SG_ID: sg-0e99c64ba4d5840d6
@@ -55,6 +55,15 @@ jobs:
             echo "=== Disk & Memory ==="
             df -h / | tail -1
             free -h | head -2
+
+            # Optional cleanup
+            if [ "${{ github.event.inputs.cleanup }}" = "true" ]; then
+              echo ""
+              echo "=== 🧹 Running Cleanup ==="
+              docker system prune -f 2>&1
+              echo "--- After cleanup ---"
+              df -h / | tail -1
+            fi
 
       - name: 🔒 Revoke SSH
         if: always()

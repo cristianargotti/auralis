@@ -189,7 +189,7 @@ export default function ReconstructPage() {
         }
     }, [job?.logs?.length, logsOpen]);
 
-    // Poll job status
+    // Poll job status — use stable deps to avoid hot loop
     useEffect(() => {
         if (!job || job.status !== "running") return;
         const interval = setInterval(async () => {
@@ -214,9 +214,10 @@ export default function ReconstructPage() {
                     loadXrayAnalysis(updated.job_id);
                 }
             } catch { /* ignore */ }
-        }, 800);
+        }, 2000);
         return () => clearInterval(interval);
-    }, [job]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [job?.job_id, job?.status]);
 
     const loadAnalysis = async (pid: string) => {
         try {
