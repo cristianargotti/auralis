@@ -12,6 +12,7 @@ import {
 interface AuthContextType {
     token: string | null;
     isAuthenticated: boolean;
+    isLoading: boolean;
     login: (username: string, password: string) => Promise<void>;
     logout: () => void;
     error: string | null;
@@ -24,12 +25,14 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [token, setToken] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     // Hydrate token from localStorage on mount
     useEffect(() => {
         const saved = localStorage.getItem(TOKEN_KEY);
         if (saved) setToken(saved);
+        setIsLoading(false);
     }, []);
 
     const login = useCallback(async (username: string, password: string) => {
@@ -68,11 +71,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         () => ({
             token,
             isAuthenticated: !!token,
+            isLoading,
             login,
             logout,
             error,
         }),
-        [token, login, logout, error]
+        [token, isLoading, login, logout, error]
     );
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

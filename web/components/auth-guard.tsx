@@ -9,25 +9,27 @@ import { useAuth } from "@/lib/auth-context";
  * Wraps all (app) pages.
  */
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-    const { isAuthenticated } = useAuth();
+    const { isAuthenticated, isLoading } = useAuth();
     const router = useRouter();
 
     useEffect(() => {
-        if (!isAuthenticated) {
+        if (!isLoading && !isAuthenticated) {
             router.replace("/login");
         }
-    }, [isAuthenticated, router]);
+    }, [isAuthenticated, isLoading, router]);
 
-    if (!isAuthenticated) {
+    if (isLoading) {
         return (
-            <div className="flex h-dvh items-center justify-center">
-                <div className="flex items-center gap-3 text-muted-foreground">
+            <div className="flex h-dvh items-center justify-center bg-black">
+                <div className="flex items-center gap-3 text-zinc-400">
                     <span className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    <span className="text-sm">Loading...</span>
+                    <span className="text-sm">Restoring session...</span>
                 </div>
             </div>
         );
     }
+
+    if (!isAuthenticated) return null; // Will redirect via effect
 
     return <>{children}</>;
 }
