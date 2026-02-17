@@ -599,6 +599,7 @@ def _subprocess_mix(
     stem_analysis: dict[str, Any] | None = None,
     ear_analysis: dict[str, Any] | None = None,
     ref_targets: dict[str, dict[str, Any]] | None = None,
+    stem_decisions: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Mix stems with professional per-stem processing driven by EAR analysis.
 
@@ -611,7 +612,7 @@ def _subprocess_mix(
     from auralis.hands.effects import (
         EffectChain, ReverbConfig, DelayConfig,
     )
-    from auralis.console.stem_recipes import build_recipe_for_stem, StemRecipe
+    from auralis.console.stem_recipes import build_recipe_for_stem, StemRecipe, enhance_recipe_with_smart_fx
 
     print(f"Subprocess: Professional mixing {len(stem_paths)} stems @ {bpm} BPM...")
 
@@ -669,6 +670,15 @@ def _subprocess_mix(
         )
 
         recipes_used.append(recipe.description)
+
+        # Apply smart FX from stem decisions (if available)
+        if stem_decisions and name in stem_decisions:
+            decision_data = stem_decisions[name]
+            extra_fx = decision_data.get("extra_fx", [])
+            if extra_fx:
+                recipe = enhance_recipe_with_smart_fx(recipe, extra_fx, bpm)
+                print(f"  → Smart FX applied: {', '.join(extra_fx)}")
+
         print(f"  {recipe.description} | vol: {recipe.volume_db:+.1f}dB | pan: {recipe.pan:+.1f}")
 
     # ── Render mix ──
@@ -1109,6 +1119,79 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     }
                     for k, v in stem_avgs.items()
                 }
+
+                # ── STEM DECISIONS ──────────────────────
+                try:
+                    from auralis.console.stem_decisions import (
+                        make_decisions, format_decisions_for_logs,
+                    )
+                    from auralis.console.stem_generator import (
+                        generate_stem, find_reference_stem_path,
+                    )
+
+                    decision_report = make_decisions(gap_report, ear_analysis_data, bank)
+                    job["result"]["stem_decisions"] = decision_report.to_dict()
+
+                    # Log decisions
+                    for line in format_decisions_for_logs(decision_report):
+                        _log(job, line)
+                    _log(job, "")
+
+                    # Execute decisions: generate stems for enhance/replace
+                    stems_dir = project_dir / "stems"
+                    gen_dir = project_dir / "generated_stems"
+                    track_duration = float(ear_analysis_data.get("duration", 180.0))
+                    track_bpm = float(ear_analysis_data.get("bpm", 120.0))
+                    track_key = str(ear_analysis_data.get("key", "C"))
+                    track_scale = str(ear_analysis_data.get("scale", "minor"))
+
+                    bank_entries = bank.list_references()
+
+                    for stem_name, decision in decision_report.decisions.items():
+                        if decision.action in ("enhance", "replace"):
+                            # Find reference stem for one-shot extraction (drums)
+                            ref_stem_path = None
+                            if stem_name == "drums":
+                                ref_stem_path = find_reference_stem_path(
+                                    "drums", bank_entries, settings.projects_dir, track_bpm
+                                )
+
+                            gen_path = generate_stem(
+                                decision=decision,
+                                bpm=track_bpm,
+                                key=track_key,
+                                scale=track_scale,
+                                duration_s=track_duration,
+                                output_dir=gen_dir,
+                                reference_stem_path=ref_stem_path,
+                            )
+
+                            if gen_path:
+                                prefix = "gen" if decision.action == "replace" else "layer"
+                                gen_stem_name = f"{prefix}_{stem_name}"
+                                rendered_stems[gen_stem_name] = str(gen_path)
+                                _log(job, f"  🎹 Generated: {gen_stem_name} → {gen_path.name}")
+
+                                # For REPLACE: mute the original stem
+                                if decision.action == "replace" and stem_name in rendered_stems:
+                                    _log(job, f"  🔇 Muting original {stem_name} (replaced)")
+                                    # Mark for muting in mixer (volume = -inf)
+                                    if "muted_stems" not in job:
+                                        job["muted_stems"] = []
+                                    job["muted_stems"].append(stem_name)
+
+                        elif decision.action == "mute":
+                            if stem_name in rendered_stems:
+                                _log(job, f"  🔇 Muting {stem_name}: {decision.reason}")
+                                if "muted_stems" not in job:
+                                    job["muted_stems"] = []
+                                job["muted_stems"].append(stem_name)
+
+                    _log(job, "")
+
+                except Exception as dec_err:
+                    _log(job, f"Stem decisions skipped: {dec_err}", "warning")
+
             else:
                 _log(job, "📊 No references in bank — using default recipes")
                 _log(job, "   Add pro tracks via /api/reference/add to enable gap analysis")
@@ -1121,6 +1204,11 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 try:
                     stem_paths_str = {k: str(v) for k, v in rendered_stems.items()}
 
+                    # Remove muted stems from the mix
+                    muted = set(job.get("muted_stems", []))
+                    if muted:
+                        stem_paths_str = {k: v for k, v in stem_paths_str.items() if k not in muted}
+
                     mix_result = await asyncio.to_thread(
                         _run_in_subprocess,
                         _subprocess_mix,
@@ -1130,6 +1218,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         stem_analysis=stem_analysis_data,
                         ear_analysis=ear_analysis_data,
                         ref_targets=ref_targets if ref_targets else None,
+                        stem_decisions=(job.get("result", {}).get("stem_decisions", {}) or {}).get("decisions"),
                     )
 
                     # Log each recipe decision

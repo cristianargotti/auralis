@@ -529,3 +529,91 @@ def build_all_recipes(
             ref_targets=ref_targets,
         )
     return recipes
+
+
+# ── Smart FX Enhancer (from Stem Decisions) ──────────────
+
+
+def enhance_recipe_with_smart_fx(
+    recipe: StemRecipe,
+    extra_fx: list[str],
+    bpm: float = 120.0,
+) -> StemRecipe:
+    """Apply additional FX from stem decision intelligence.
+
+    The stem decision engine can recommend extra effects beyond what
+    the recipe builder provides.  This function activates them.
+
+    Args:
+        recipe: Existing recipe to enhance.
+        extra_fx: List of FX tags from StemDecision.extra_fx.
+        bpm: Track BPM for tempo-synced effects.
+
+    Returns:
+        Enhanced StemRecipe (mutated in-place and returned).
+    """
+    from auralis.hands.effects import ChorusConfig
+
+    if not extra_fx:
+        return recipe
+
+    chain = recipe.chain
+    fx_notes: list[str] = []
+
+    for fx in extra_fx:
+        if fx == "chorus" and chain.chorus is None:
+            chain.chorus = ChorusConfig(
+                rate_hz=0.5, depth=0.3, mix=0.25,
+            )
+            fx_notes.append("FX: +chorus (stereo width)")
+
+        elif fx == "sidechain" and chain.sidechain is None:
+            chain.sidechain = SidechainConfig(
+                threshold_db=-20.0, ratio=4.0,
+                attack_ms=5.0, release_ms=100.0,
+                frequency=bpm / 60.0,
+            )
+            fx_notes.append("FX: +sidechain (pump)")
+
+        elif fx == "saturation" and chain.distortion is None:
+            chain.distortion = DistortionConfig(
+                drive=0.15, mix=0.3,
+            )
+            fx_notes.append("FX: +saturation (warmth)")
+
+        elif fx == "de_mud_eq":
+            # Add a mid-cut EQ band to clean up muddiness
+            if chain.eq_bands is None:
+                chain.eq_bands = []
+            chain.eq_bands.append(
+                EQBand(freq_hz=400.0, gain_db=-3.0, q=1.5)
+            )
+            fx_notes.append("FX: -3dB @400Hz (de-mud)")
+
+        elif fx == "air_boost":
+            if chain.eq_bands is None:
+                chain.eq_bands = []
+            chain.eq_bands.append(
+                EQBand(freq_hz=12000.0, gain_db=2.5, q=0.7)
+            )
+            fx_notes.append("FX: +2.5dB @12kHz (air)")
+
+        elif fx == "compress_harder":
+            if chain.compressor:
+                chain.compressor.ratio = min(chain.compressor.ratio + 2.0, 12.0)
+                chain.compressor.threshold_db = max(chain.compressor.threshold_db - 3.0, -40.0)
+                fx_notes.append("FX: compress harder (ratio+2, thresh-3)")
+
+        elif fx == "reverb_boost":
+            # Increase reverb send
+            for send in recipe.sends:
+                if send.bus_name == "reverb":
+                    send.amount = min(send.amount + 0.15, 0.6)
+                    fx_notes.append(f"FX: reverb send +0.15 (→{send.amount:.2f})")
+                    break
+
+    if fx_notes:
+        recipe.description += " | " + " | ".join(fx_notes)
+
+    return recipe
+
