@@ -592,25 +592,93 @@ async def cleanup_project(job_id: str):
     }
 
 
-def _subprocess_mix(stem_paths: dict[str, str], output_path: str, bpm: float) -> dict[str, Any]:
-    """Mix stems in a separate process to prevent segfaults."""
+def _subprocess_mix(
+    stem_paths: dict[str, str],
+    output_path: str,
+    bpm: float,
+    stem_analysis: dict[str, Any] | None = None,
+    ear_analysis: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Mix stems with professional per-stem processing driven by EAR analysis.
+
+    Uses stem_recipes to build intelligent EffectChains, then routes through
+    the Mixer engine with reverb/delay buses and proper gain staging.
+    """
     import soundfile as sf
     import numpy as np
     from auralis.hands.mixer import Mixer, MixConfig
+    from auralis.hands.effects import (
+        EffectChain, ReverbConfig, DelayConfig,
+    )
+    from auralis.console.stem_recipes import build_recipe_for_stem, StemRecipe
 
-    print(f"Subprocess: Mixing {len(stem_paths)} stems...")
+    print(f"Subprocess: Professional mixing {len(stem_paths)} stems @ {bpm} BPM...")
+
     mixer = Mixer(MixConfig(sample_rate=44100, bpm=bpm))
-    
-    # Load stems
+
+    # ── Add send buses ──
+    # Reverb bus: medium hall with LP damping
+    mixer.add_bus(
+        "reverb",
+        effects=EffectChain(
+            name="reverb_bus",
+            reverb=ReverbConfig(room_size=0.7, damping=0.5, wet=1.0, pre_delay_ms=15.0),
+        ),
+        volume_db=-3.0,
+    )
+    # Delay bus: BPM-synced 1/8 note
+    delay_time = (60000.0 / bpm) / 2  # 1/8 note in ms
+    mixer.add_bus(
+        "delay",
+        effects=EffectChain(
+            name="delay_bus",
+            delay=DelayConfig(time_ms=delay_time, feedback=0.3, wet=1.0, ping_pong=False),
+        ),
+        volume_db=-6.0,
+    )
+    print(f"  Buses: Reverb (hall 0.7, damp 0.5) | Delay ({delay_time:.0f}ms, fb 0.3)")
+
+    # ── Build recipes and add tracks ──
+    recipes_used: list[str] = []
     for name, path in stem_paths.items():
         data, sr = sf.read(path, dtype="float64")
-        # Ensure mono
         if data.ndim > 1:
             data = np.mean(data, axis=1)
-        mixer.add_track(name, data)
-    
+
+        # Get per-stem analysis (or empty dict for fallback)
+        sa = (stem_analysis or {}).get(name, {})
+
+        # Build intelligent recipe
+        recipe: StemRecipe = build_recipe_for_stem(
+            stem_name=name,
+            stem_analysis=sa,
+            bpm=bpm,
+            ear_data=ear_analysis,
+        )
+
+        # Add track to mixer with recipe settings
+        mixer.add_track(
+            name=name,
+            audio=data,
+            volume_db=recipe.volume_db,
+            pan=recipe.pan,
+            effects=recipe.chain,
+            sends=recipe.sends,
+        )
+
+        recipes_used.append(recipe.description)
+        print(f"  {recipe.description} | vol: {recipe.volume_db:+.1f}dB | pan: {recipe.pan:+.1f}")
+
+    # ── Render mix ──
     result = mixer.mix(output_path=output_path)
-    return {"tracks_mixed": result.tracks_mixed}
+    print(f"  ✓ Mixed {result.tracks_mixed} tracks, peak: {result.peak_db:.1f} dBFS")
+
+    return {
+        "tracks_mixed": result.tracks_mixed,
+        "buses_used": result.buses_used,
+        "peak_db": result.peak_db,
+        "recipes": recipes_used,
+    }
 
 
 def _subprocess_master(input_path: str, output_path: str, target_lufs: float, bpm: float) -> None:
@@ -989,36 +1057,48 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         gc.collect()
         _save_jobs()  # checkpoint after HANDS
 
-        # Stage 5: CONSOLE — Mix + Master (REAL)
+        # Stage 5: CONSOLE — Professional Mix + Master
         job["stage"] = "console"
         job["stages"]["console"]["status"] = "running"
-        job["stages"]["console"]["message"] = "Mixing stems..."
+        job["stages"]["console"]["message"] = "Building mix recipes from analysis..."
         _log(job, "── STAGE 5: CONSOLE ──", "stage")
-        _log(job, f"Mixing {len(rendered_stems)} stems...")
+        _log(job, "🎚️ Building mix recipes from EAR analysis...")
 
         mix_path = project_dir / "mix.wav"
         master_path = project_dir / "master.wav"
         master_info: dict[str, Any] = {}
 
+        # Gather analysis data for stem recipes
+        stem_analysis_data = (job.get("result") or {}).get("stem_analysis", {})
+        ear_analysis_data = analysis  # Full EAR analysis from stage 1
+
         try:
             if rendered_stems:
-                # Load all rendered stems and mix (SUBPROCESS)
+                # Professional mix with stem recipes (SUBPROCESS)
                 try:
-                    # Convert paths to strings for pickling
                     stem_paths_str = {k: str(v) for k, v in rendered_stems.items()}
-                    
+
                     mix_result = await asyncio.to_thread(
                         _run_in_subprocess,
                         _subprocess_mix,
                         stem_paths=stem_paths_str,
                         output_path=str(mix_path),
                         bpm=plan.get("bpm", 120.0),
+                        stem_analysis=stem_analysis_data,
+                        ear_analysis=ear_analysis_data,
                     )
-                    
+
+                    # Log each recipe decision
+                    for recipe_desc in mix_result.get("recipes", []):
+                        _log(job, f"  {recipe_desc}")
+
+                    _log(job, f"🔊 Buses: reverb + delay ({mix_result.get('buses_used', 0)} active)")
+                    peak = mix_result.get("peak_db", 0)
+                    _log(job, f"✓ Mixed {mix_result['tracks_mixed']} tracks, peak: {peak:.1f} dBFS", "success")
+
                     job["stages"]["console"]["message"] = (
                         f"Mixed {mix_result['tracks_mixed']} tracks → mastering..."
                     )
-                    _log(job, f"✓ Mixed {mix_result['tracks_mixed']} tracks (subprocess)", "success")
                 except Exception as e:
                     _log(job, f"Mixer subprocess failed ({e}) — falling back to simple sum", "warning")
                     # Fallback: quick sum mix (sf already imported at module level)
@@ -1047,8 +1127,10 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     target_lufs = analysis.get("integrated_lufs", -14.0)
                     if not isinstance(target_lufs, (int, float)):
                         target_lufs = -14.0
-                        
-                    _log(job, f"Mastering by reference (target LUFS: {target_lufs})...")
+
+                    _log(job, f"💎 Mastering: target {target_lufs} LUFS")
+                    _log(job, "  Chain: M/S EQ → Soft Clip → Multiband Sat → Harmonic Exciter")
+                    _log(job, "  Chain: Multiband Comp → Stereo Width → Limiter → Dither")
                     try:
                         await asyncio.to_thread(
                             _run_in_subprocess,
@@ -1059,8 +1141,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                             bpm=plan.get("bpm", 120.0),
                         )
                         
-                        master_info = {"lufs": target_lufs, "method": "matchering"}
-                        _log(job, f"✓ Mastered to {target_lufs} LUFS", "success")
+                        master_info = {"lufs": target_lufs, "method": "full_chain"}
+                        _log(job, f"✓ Mastered to {target_lufs} LUFS (10-stage chain)", "success")
                     except Exception as e:
                         _log(job, f"Mastering failed ({e}) — bypassing", "warning")
                         # Fallback: copy mix to master
