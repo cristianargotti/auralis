@@ -49,8 +49,17 @@ jobs:
             echo "=== Container Status ==="
             docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>&1
             echo ""
+            echo "=== Container Restart Info ==="
+            docker inspect ${{ github.event.inputs.container }} --format '{{.RestartCount}} restarts | Exit: {{.State.ExitCode}} | OOM: {{.State.OOMKilled}} | Started: {{.State.StartedAt}}' 2>&1
+            echo ""
             echo "=== Last ${{ github.event.inputs.lines }} lines of ${{ github.event.inputs.container }} ==="
             docker logs ${{ github.event.inputs.container }} --tail ${{ github.event.inputs.lines }} 2>&1
+            echo ""
+            echo "=== Previous Container Logs (last crash) ==="
+            docker logs ${{ github.event.inputs.container }} --previous --tail 80 2>&1 || echo "(no previous logs)"
+            echo ""
+            echo "=== OOM Killer Check ==="
+            sudo dmesg | grep -i "oom\|killed process" | tail -5 2>&1 || echo "(no OOM events)"
             echo ""
             echo "=== Disk & Memory ==="
             df -h / | tail -1
