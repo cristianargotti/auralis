@@ -213,9 +213,9 @@ export default function SpectralCompare({ jobId, hasOriginal = true, hasMaster =
 
             {/* Footer */}
             <div className="flex items-center gap-4 px-4 py-2 border-t border-zinc-800/50 text-[10px] text-zinc-500">
-                <span>128 Mel bands · 22kHz</span>
-                <span>Magma colormap · -60 → 0 dB</span>
-                <span>Cached after first generation</span>
+                <span>256 Mel bands · 20kHz</span>
+                <span>Magma colormap · -70 → 0 dB</span>
+                <span>200 DPI · Cached after first generation</span>
             </div>
         </div>
     );

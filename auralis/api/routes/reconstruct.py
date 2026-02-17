@@ -428,7 +428,7 @@ async def get_spectrogram(
 
 
 def _generate_spectrogram(audio_path: str, output_path: str) -> str:
-    """Generate mel spectrogram PNG — runs in thread pool."""
+    """Generate high-quality mel spectrogram PNG — runs in thread pool."""
     import librosa
     import librosa.display
     import matplotlib
@@ -436,31 +436,55 @@ def _generate_spectrogram(audio_path: str, output_path: str) -> str:
     import matplotlib.pyplot as plt
     import numpy as np
 
-    # Load at reduced SR for efficiency (22kHz is fine for spectrograms)
-    y, sr = librosa.load(audio_path, sr=22050, mono=True)
+    # Full sample rate for complete frequency spectrum (up to 22kHz)
+    y, sr = librosa.load(audio_path, sr=44100, mono=True)
 
-    # Compute mel spectrogram
-    S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=sr // 2)
+    # High-resolution mel spectrogram
+    S = librosa.feature.melspectrogram(
+        y=y, sr=sr,
+        n_fft=4096,         # High frequency resolution
+        hop_length=512,     # Fine time resolution
+        n_mels=256,         # 256 mel bands (2x previous)
+        fmin=20,            # Full audible range
+        fmax=20000,         # Up to 20kHz
+    )
     S_dB = librosa.power_to_db(S, ref=np.max)
 
-    # Create figure with dark theme
-    fig, ax = plt.subplots(1, 1, figsize=(16, 4), dpi=100)
+    # Create premium figure — dark theme, tall aspect ratio
+    fig, ax = plt.subplots(1, 1, figsize=(20, 6), dpi=200)
     fig.patch.set_facecolor("#09090b")
     ax.set_facecolor("#09090b")
 
-    librosa.display.specshow(
+    img = librosa.display.specshow(
         S_dB, sr=sr, x_axis="time", y_axis="mel",
-        ax=ax, cmap="magma", vmin=-60, vmax=0,
+        ax=ax, cmap="magma",
+        vmin=-70, vmax=0,       # Wider dynamic range
+        hop_length=512,
     )
 
-    ax.set_xlabel("")
-    ax.set_ylabel("")
-    ax.tick_params(colors="#71717a", labelsize=7)
+    # Styled axes — subtle frequency/time labels
+    ax.set_xlabel("Time", fontsize=8, color="#71717a", labelpad=4)
+    ax.set_ylabel("Frequency", fontsize=8, color="#71717a", labelpad=4)
+    ax.tick_params(colors="#52525b", labelsize=6, width=0.5, length=3)
+
+    # Remove hard borders, add subtle grid
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    fig.tight_layout(pad=0.5)
-    fig.savefig(output_path, dpi=100, facecolor="#09090b", bbox_inches="tight")
+    # Colorbar for dB scale
+    cbar = fig.colorbar(img, ax=ax, format="%+.0f dB", pad=0.01, aspect=30)
+    cbar.ax.tick_params(colors="#52525b", labelsize=6, width=0.5, length=3)
+    cbar.outline.set_visible(False)
+    cbar.set_label("dB", fontsize=7, color="#52525b", rotation=0, labelpad=8)
+
+    fig.tight_layout(pad=0.3)
+    fig.savefig(
+        output_path,
+        dpi=200,
+        facecolor="#09090b",
+        bbox_inches="tight",
+        pad_inches=0.1,
+    )
     plt.close(fig)
 
     # Free memory
