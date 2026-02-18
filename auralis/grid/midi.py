@@ -118,17 +118,65 @@ def generate_chord_progression(
     velocity: int = 80,
     energy: float = 0.5,
     seed: int = 42,
+    section_type: str = "",
 ) -> Pattern:
-    """Generate a chord progression with energy-aware complexity.
+    """Generate a chord progression with voice leading.
 
-    Low energy  → simple triads, whole notes, gentle dynamics
-    High energy → 7th/9th chords, rhythmic variation, wide dynamics
+    Uses theory.suggest_progression() for section-aware templates
+    and voice_lead() for smooth transitions.  Falls back to energy-
+    tiered pools when section_type is not specified.
     """
     rng = random.Random(seed)
     is_minor = scale in ("minor", "dorian", "phrygian", "harmonic_minor")
 
-    # Energy-tiered progressions (the AI already suggests structure,
-    # but this gives musical defaults when the AI doesn't specify)
+    # ── Theory-powered progression (when section context known) ──
+    if not progression and section_type:
+        from auralis.grid.theory import suggest_progression as _suggest
+
+        voicings = _suggest(
+            root=root,
+            scale=scale,
+            octave=octave,
+            bars=bars,
+            energy=energy,
+            section_type=section_type,
+            seed=seed,
+        )
+
+        notes: list[Note] = []
+        for bar, voicing in enumerate(voicings):
+            bar_energy = energy + rng.uniform(-0.1, 0.1)
+            bar_vel = int(velocity * (0.7 + 0.3 * bar_energy))
+
+            if energy > 0.7:
+                # High energy: rhythmic chord stabs
+                positions = [0.0, 1.0, 2.0, 3.0] if energy > 0.9 else [0.0, 2.0]
+                for pos in positions:
+                    stab_vel = bar_vel + rng.randint(-8, 8)
+                    for note_pitch in voicing.notes:
+                        notes.append(Note(
+                            pitch=note_pitch,
+                            start_beat=bar * 4.0 + pos,
+                            duration_beats=0.8 if energy > 0.9 else 1.8,
+                            velocity=max(40, min(127, stab_vel)),
+                        ))
+            else:
+                # Low/mid energy: sustained pads
+                for note_pitch in voicing.notes:
+                    notes.append(Note(
+                        pitch=note_pitch,
+                        start_beat=bar * 4.0,
+                        duration_beats=3.8,
+                        velocity=max(40, min(127, bar_vel)),
+                    ))
+
+        return Pattern(
+            name=f"Chord Progression ({root} {scale})",
+            notes=notes,
+            length_beats=bars * 4.0,
+        )
+
+    # ── Fallback: energy-tiered pools (no section context) ──
     if progression is None:
         if is_minor:
             pool = [
@@ -158,13 +206,22 @@ def generate_chord_progression(
             return "minor" if is_minor else "major"
 
     scale_notes = get_scale_notes(root, scale, octave)
-    notes: list[Note] = []
+    notes = []
+
+    # Voice-lead even in fallback mode
+    prev_chord: list[int] = []
 
     for bar in range(bars):
         degree = progression[bar % len(progression)]
         root_note = scale_notes[degree % len(scale_notes)]
         chord_type = _chord_type_for_degree(degree)
         chord = get_chord_notes(root_note, chord_type)
+
+        # Apply voice leading between consecutive chords
+        if prev_chord:
+            from auralis.grid.theory import voice_lead
+            chord = voice_lead(prev_chord, root_note, chord_type)
+        prev_chord = chord
 
         # Velocity follows energy arc
         bar_energy = energy + rng.uniform(-0.1, 0.1)
@@ -392,6 +449,23 @@ def _extend_motif(
     return result
 
 
+def _snap_to_chord_tone(
+    pitch: int,
+    chord_tones: list[int],
+) -> int:
+    """Snap a pitch to the nearest chord tone (by pitch class)."""
+    if not chord_tones:
+        return pitch
+    pitch_class = pitch % 12
+    # Find the chord tone with the smallest pitch-class distance
+    best_tone = min(
+        chord_tones,
+        key=lambda ct: min(abs(pitch_class - ct % 12), 12 - abs(pitch_class - ct % 12)),
+    )
+    # Keep original octave, just change pitch class
+    return (pitch // 12) * 12 + (best_tone % 12)
+
+
 def _motif_to_notes(
     motif: list[tuple[int, float]],
     scale_notes: list[int],
@@ -399,12 +473,24 @@ def _motif_to_notes(
     velocity: int,
     contour_target: float,
     rng: random.Random,
+    chord_tones: list[int] | None = None,
 ) -> list[Note]:
-    """Convert a motif (scale-relative) to absolute Note objects."""
+    """Convert a motif (scale-relative) to absolute Note objects.
+
+    If chord_tones is provided, notes on strong beats (beat 0 or 2
+    within any bar) are snapped to the nearest chord tone.
+    """
     notes: list[Note] = []
     beat = start_beat
     for pos, dur in motif:
         pitch = scale_notes[pos % len(scale_notes)]
+
+        # Chord-tone targeting on strong beats
+        if chord_tones:
+            beat_in_bar = beat % 4.0
+            if beat_in_bar < 0.25 or abs(beat_in_bar - 2.0) < 0.25:
+                pitch = _snap_to_chord_tone(pitch, chord_tones)
+
         # Velocity follows contour with human variation
         vel = int(velocity * (0.7 + 0.3 * contour_target)) + rng.randint(-10, 8)
         notes.append(Note(
@@ -442,6 +528,7 @@ def generate_melody(
     contour: str = "arc",
     section_type: str = "verse",
     occurrence: int = 0,
+    chord_progression: Pattern | None = None,
 ) -> Pattern:
     """Generate a melodic pattern using motif-based composition.
 
@@ -540,6 +627,18 @@ def generate_melody(
 
         # Render motif into notes at the correct beat position
         slot_start = slot_idx * beats_per_slot
+
+        # Extract chord tones for this slot from the chord progression
+        slot_chord_tones: list[int] | None = None
+        if chord_progression:
+            slot_chord_tones = [
+                n.pitch for n in chord_progression.notes
+                if slot_start <= n.start_beat < slot_start + beats_per_slot
+            ]
+            if not slot_chord_tones:
+                # Fall back to all chord tones
+                slot_chord_tones = [n.pitch for n in chord_progression.notes]
+
         motif_notes = _motif_to_notes(
             motif_data,
             [n + octave_shift for n in scale_notes],
@@ -547,6 +646,7 @@ def generate_melody(
             velocity,
             target,
             arrange_rng,
+            chord_tones=slot_chord_tones,
         )
 
         # Trim notes that extend beyond slot boundary

@@ -130,6 +130,80 @@ def _crossfade_concat(
 
     return result
 
+
+def _generate_transition_fx(
+    from_energy: float,
+    to_energy: float,
+    to_section_type: str,
+    section_duration_s: float,
+    sr: int = 44100,
+    bpm: float = 120.0,
+) -> NDArray[np.float64] | None:
+    """Generate transition FX audio to overlay on a section's tail.
+
+    Returns a full-section-length array (mostly silence) with FX
+    overlaid on the last N bars.  Returns None if no transition needed.
+
+    Rules:
+      - Riser before drops and choruses (energy jump >= 0.2)
+      - Short impact hit at the downbeat of high-energy sections
+      - No transition between low-energy sections
+    """
+    energy_jump = to_energy - from_energy
+    needs_riser = energy_jump >= 0.15 and to_section_type in (
+        "drop", "chorus",
+    )
+    needs_impact = to_section_type == "drop" and to_energy >= 0.7
+
+    if not needs_riser and not needs_impact:
+        return None
+
+    total_samples = int(section_duration_s * sr)
+    fx_audio = np.zeros(total_samples, dtype=np.float64)
+
+    if needs_riser:
+        # Filtered noise riser over last 2 bars
+        beat_dur = 60.0 / bpm
+        riser_dur_s = min(2 * 4 * beat_dur, section_duration_s * 0.5)
+        riser_len = int(riser_dur_s * sr)
+
+        # White noise
+        rng = np.random.default_rng(42)
+        noise = rng.standard_normal(riser_len) * 0.12
+
+        # HP filter sweep: 200Hz → 8000Hz (simulated with time-varying filter)
+        from scipy.signal import butter, sosfilt
+        n_segments = 16
+        seg_len = riser_len // n_segments
+        filtered = np.zeros(riser_len, dtype=np.float64)
+        for seg_i in range(n_segments):
+            t = seg_i / n_segments
+            cutoff = 200 + (8000 - 200) * (t ** 2)  # Exponential sweep
+            nyq = sr / 2
+            cutoff_norm = min(cutoff / nyq, 0.95)
+            sos = butter(2, cutoff_norm, btype="high", output="sos")
+            start = seg_i * seg_len
+            end = start + seg_len if seg_i < n_segments - 1 else riser_len
+            filtered[start:end] = sosfilt(sos, noise[start:end])
+
+        # Volume envelope: fade in from silence
+        env = np.linspace(0.0, 1.0, riser_len) ** 1.5
+        riser = filtered * env * (0.15 + energy_jump * 0.3)
+
+        # Place at end of section
+        fx_audio[-riser_len:] += riser
+
+    if needs_impact:
+        # Short noise burst (20ms) at the very end
+        impact_len = int(0.02 * sr)
+        rng = np.random.default_rng(99)
+        impact = rng.standard_normal(impact_len) * 0.2
+        # Sharp decay envelope
+        impact *= np.exp(-np.linspace(0, 5, impact_len))
+        fx_audio[-impact_len:] += impact
+
+    return fx_audio
+
 def _apply_narrative_fx(
     audio: NDArray[np.float64],
     track_name: str,
@@ -476,6 +550,41 @@ def render_track(
             midi_files[track_name] = str(midi_path)
 
     _progress("hands", 1.0, f"Rendered {len(stems)} tracks with narrative evolution")
+
+    # ── Step 3a: Transition FX — risers and impacts between sections ──
+    if len(arrangement.sections) > 1:
+        transition_audio_chunks: list[NDArray[np.float64]] = []
+        for si, section in enumerate(arrangement.sections):
+            section_dur_s = section.template.bars * 4.0 * beat_duration
+            if si < len(arrangement.sections) - 1:
+                next_section = arrangement.sections[si + 1]
+                fx = _generate_transition_fx(
+                    from_energy=section.template.energy,
+                    to_energy=next_section.template.energy,
+                    to_section_type=next_section.template.name,
+                    section_duration_s=section_dur_s,
+                    sr=sample_rate,
+                    bpm=plan.bpm,
+                )
+                if fx is not None:
+                    transition_audio_chunks.append(fx)
+                else:
+                    transition_audio_chunks.append(
+                        np.zeros(int(section_dur_s * sample_rate), dtype=np.float64)
+                    )
+            else:
+                transition_audio_chunks.append(
+                    np.zeros(int(section_dur_s * sample_rate), dtype=np.float64)
+                )
+
+        transitions_audio = _crossfade_concat(
+            transition_audio_chunks, crossfade_ms=50, sr=sample_rate,
+        )
+        if np.any(transitions_audio != 0):
+            track_audio["transitions"] = transitions_audio
+            t_path = out / "stem_transitions.wav"
+            save_audio(transitions_audio, t_path, sample_rate)
+            stems["transitions"] = str(t_path)
 
     # ── Step 3b: Textures — Neural generation via Stable Audio ──
     if plan.texture_prompts:

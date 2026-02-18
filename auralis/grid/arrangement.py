@@ -179,6 +179,62 @@ def _evolve_template(
     return evolved
 
 
+# ── Track entry order for staggered intros ──
+_ENTRY_ORDER = ["drums", "bass", "chords", "melody"]
+
+
+def _apply_micro_arrangement(
+    section: "SectionInstance",
+) -> None:
+    """Trim element entry/exit within a section for natural build.
+
+    Modifies section.patterns in-place:
+      - intro:     Stagger entry every 2 bars (drums first, melody last)
+      - outro:     Stagger exit in reverse (melody drops first)
+      - breakdown: Strip drums for first 2 bars, bass for first bar
+      - drop/chorus/verse: No trimming (full impact)
+    """
+    sec_type = section.template.name
+    sec_bars = section.template.bars
+
+    if sec_type == "intro" and sec_bars >= 4:
+        # Stagger entry: each element starts 2 bars later
+        bar_delay = 2
+        for idx, track_name in enumerate(_ENTRY_ORDER):
+            if track_name not in section.patterns:
+                continue
+            start_bar = idx * bar_delay
+            if start_bar <= 0:
+                continue  # First element plays from bar 0
+            start_beat = start_bar * 4.0
+            pattern = section.patterns[track_name]
+            pattern.notes = [n for n in pattern.notes if n.start_beat >= start_beat]
+
+    elif sec_type == "outro" and sec_bars >= 4:
+        # Stagger exit: reverse order, each drops 2 bars earlier
+        bar_delay = 2
+        for idx, track_name in enumerate(reversed(_ENTRY_ORDER)):
+            if track_name not in section.patterns:
+                continue
+            cutoff_bar = sec_bars - (idx * bar_delay)
+            if cutoff_bar >= sec_bars:
+                continue  # Last element plays the whole section
+            cutoff_beat = cutoff_bar * 4.0
+            pattern = section.patterns[track_name]
+            pattern.notes = [n for n in pattern.notes if n.start_beat < cutoff_beat]
+
+    elif sec_type == "breakdown" and sec_bars >= 4:
+        # Remove drums for first 2 bars, bass for first bar
+        if "drums" in section.patterns:
+            section.patterns["drums"].notes = [
+                n for n in section.patterns["drums"].notes if n.start_beat >= 8.0
+            ]
+        if "bass" in section.patterns:
+            section.patterns["bass"].notes = [
+                n for n in section.patterns["bass"].notes if n.start_beat >= 4.0
+            ]
+
+
 def generate_arrangement(config: ArrangementConfig) -> Arrangement:
     """Generate a complete song arrangement with section variation.
 
@@ -251,6 +307,7 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
                 velocity=int(60 + active_template.energy * 40),
                 energy=active_template.energy,
                 seed=seed + 200,
+                section_type=active_template.name,
             )
 
         if active_template.has_melody:
@@ -278,7 +335,11 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
                 contour=contour,
                 section_type=active_template.name,
                 occurrence=occurrence,  # Progressive variation
+                chord_progression=section.patterns.get("chords"),
             )
+
+        # ── Micro-arrangement: stagger element entry/exit ──
+        _apply_micro_arrangement(section)
 
         # ── Humanize all patterns ──
         for track_name, pattern in section.patterns.items():
