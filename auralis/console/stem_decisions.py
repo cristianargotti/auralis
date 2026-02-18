@@ -356,7 +356,13 @@ def format_decisions_for_logs(report: DecisionReport) -> list[str]:
     lines: list[str] = []
 
     if not report.decisions:
-        lines.append("🧠 No stem decisions (reference bank empty)")
+        if report.reference_count == 0:
+            lines.append("🧠 No stem decisions (reference bank empty — add reference tracks first)")
+        else:
+            lines.append(
+                f"🧠 No stem decisions (refs={report.reference_count}, but no stem gaps found "
+                "— check stem_analysis data)"
+            )
         return lines
 
     lines.append("── STEM DECISIONS ──────────────────────")

@@ -1395,128 +1395,139 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         sf.write(str(mix_path), mix, sr)
                     job["stages"]["console"]["message"] = f"Sum-mixed {len(all_audio)} stems (fallback)"
 
-                # Master by reference (SUBPROCESS)
-                if mix_path.exists():
-                    job["stages"]["console"]["message"] = "Mastering by reference..."
+                # LUFS target: brain → reference bank → original track (fallback)
+                target_lufs = None
+                # 1. Use brain's target (derived from reference DNA)
+                if brain_report and hasattr(brain_report, 'master_plan'):
+                    brain_target = getattr(brain_report.master_plan, 'target_lufs', None)
+                    if brain_target is not None and isinstance(brain_target, (int, float)):
+                        target_lufs = float(brain_target)
+                # 2. Use reference bank average LUFS
+                if target_lufs is None and bank and hasattr(bank, 'get_master_averages'):
+                    ref_avg = bank.get_master_averages()
+                    if ref_avg and ref_avg.get("lufs"):
+                        target_lufs = float(ref_avg["lufs"])
+                # 3. Fallback: original track LUFS (clamped)
+                if target_lufs is None:
                     target_lufs = analysis.get("integrated_lufs", -14.0)
                     if not isinstance(target_lufs, (int, float)):
                         target_lufs = -14.0
-                    # Don't target quieter than -16 LUFS for reconstruction
-                    target_lufs = max(target_lufs, -16.0)
+                # Safety: never target quieter than -16 LUFS
+                target_lufs = max(float(target_lufs), -16.0)
 
-                    _log(job, f"💎 Mastering: target {target_lufs} LUFS")
-                    _log(job, "  Chain: M/S EQ → Soft Clip → Multiband Sat → Harmonic Exciter")
-                    _log(job, "  Chain: Multiband Comp → Stereo Width → Limiter → Dither")
-                    try:
-                        # Prepare brain master plan for subprocess
-                        brain_plan_dict = None
-                        if brain_report and brain_report.master_plan:
-                            try:
-                                mp = brain_report.master_plan
-                                brain_plan_dict = {
-                                    k: getattr(mp, k, None)
-                                    for k in dir(mp)
-                                    if not k.startswith('_') and not callable(getattr(mp, k, None))
+                _log(job, f"💎 Mastering: target {target_lufs} LUFS")
+                _log(job, "  Chain: M/S EQ → Soft Clip → Multiband Sat → Harmonic Exciter")
+                _log(job, "  Chain: Multiband Comp → Stereo Width → Limiter → Dither")
+                try:
+                    # Prepare brain master plan for subprocess
+                    brain_plan_dict = None
+                    if brain_report and brain_report.master_plan:
+                        try:
+                            mp = brain_report.master_plan
+                            brain_plan_dict = {
+                                k: getattr(mp, k, None)
+                                for k in dir(mp)
+                                if not k.startswith('_') and not callable(getattr(mp, k, None))
+                            }
+                        except Exception:
+                            pass
+
+                    await asyncio.to_thread(
+                        _run_in_subprocess,
+                        _subprocess_master,
+                        input_path=str(mix_path),
+                        output_path=str(master_path),
+                        target_lufs=target_lufs,
+                        bpm=plan.get("bpm", 120.0),
+                        brain_plan_dict=brain_plan_dict,
+                    )
+                    
+                    master_info = {"lufs": target_lufs, "method": "full_chain"}
+                    _log(job, f"✓ Mastered to {target_lufs} LUFS (10-stage chain)", "success")
+
+                    # ── AUTO-CORRECTION: compare vs DNA ──
+                    if brain_report and master_path.exists():
+                        try:
+                            from auralis.console.auto_correct import evaluate_and_correct
+                            deep_profile = bank.get_deep_profile() if bank else {}
+
+                            if deep_profile:
+                                # Build stem paths dict for per-stem evaluation
+                                stem_paths_for_ac = {
+                                    k: str(v) for k, v in rendered_stems.items()
+                                    if not k.startswith("_")
                                 }
-                            except Exception:
-                                pass
+                                correction = await asyncio.to_thread(
+                                    evaluate_and_correct,
+                                    master_path=str(master_path),
+                                    deep_profile=deep_profile,
+                                    pass_number=1,
+                                    max_passes=2,
+                                    threshold=0.15,
+                                    stem_paths=stem_paths_for_ac,
+                                    ref_targets=ref_targets if ref_targets else None,
+                                )
 
-                        await asyncio.to_thread(
-                            _run_in_subprocess,
-                            _subprocess_master,
-                            input_path=str(mix_path),
-                            output_path=str(master_path),
-                            target_lufs=target_lufs,
-                            bpm=plan.get("bpm", 120.0),
-                            brain_plan_dict=brain_plan_dict,
-                        )
-                        
-                        master_info = {"lufs": target_lufs, "method": "full_chain"}
-                        _log(job, f"✓ Mastered to {target_lufs} LUFS (10-stage chain)", "success")
+                                job["result"]["auto_correction"] = correction.to_dict()
+                                _log(job, f"🔄 Auto-correction: gap={correction.total_gap:.0%}, pass={correction.pass_number}")
 
-                        # ── AUTO-CORRECTION: compare vs DNA ──
-                        if brain_report and master_path.exists():
-                            try:
-                                from auralis.console.auto_correct import evaluate_and_correct
-                                deep_profile = bank.get_deep_profile() if bank else {}
+                                # Log per-stem corrections
+                                for sname, sc in correction.stem_corrections.items():
+                                    if sc.needs_correction:
+                                        _log(job, f"  🎚️ {sname}: gap={sc.gap_score:.0%}")
+                                        for reason in sc.reasoning[:3]:
+                                            _log(job, f"    {reason}")
 
-                                if deep_profile:
-                                    # Build stem paths dict for per-stem evaluation
-                                    stem_paths_for_ac = {
-                                        k: str(v) for k, v in rendered_stems.items()
-                                        if not k.startswith("_")
-                                    }
-                                    correction = await asyncio.to_thread(
-                                        evaluate_and_correct,
-                                        master_path=str(master_path),
-                                        deep_profile=deep_profile,
-                                        pass_number=1,
-                                        max_passes=2,
-                                        threshold=0.15,
-                                        stem_paths=stem_paths_for_ac,
-                                        ref_targets=ref_targets if ref_targets else None,
+                                if correction.master_correction:
+                                    for reason in correction.master_correction.reasoning:
+                                        _log(job, f"  {reason}")
+
+                                if correction.should_reprocess:
+                                    _log(job, "🔄 Gap detected — applying corrections for pass 2...")
+
+                                    # Merge corrections into brain plan
+                                    corrected_plan = dict(brain_plan_dict or {})
+                                    mc = correction.master_correction
+                                    if mc and mc.corrections:
+                                        # Apply LUFS correction
+                                        if "target_lufs_adjust" in mc.corrections:
+                                            corrected_plan["target_lufs"] = mc.corrections["target_lufs_adjust"]
+                                            _log(job, f"  → LUFS adjusted to {mc.corrections['target_lufs_adjust']:.1f}")
+
+                                        # Apply EQ corrections (append to existing mid bands)
+                                        if "eq_adjust" in mc.corrections:
+                                            existing = list(corrected_plan.get("mid_eq_bands", []))
+                                            for eq_fix in mc.corrections["eq_adjust"]:
+                                                if isinstance(eq_fix, dict):
+                                                    freq = eq_fix.get("freq", 1000)
+                                                    gain = eq_fix.get("gain_db", 0)
+                                                    q = eq_fix.get("q", 1.0)
+                                                    existing.append((freq, gain, q))
+                                                    _log(job, f"  → EQ fix: {gain:+.1f}dB @{freq:.0f}Hz")
+                                                else:
+                                                    existing.append(eq_fix)
+                                            corrected_plan["mid_eq_bands"] = existing
+
+                                    await asyncio.to_thread(
+                                        _run_in_subprocess,
+                                        _subprocess_master,
+                                        input_path=str(mix_path),
+                                        output_path=str(master_path),
+                                        target_lufs=corrected_plan.get("target_lufs", target_lufs),
+                                        bpm=plan.get("bpm", 120.0),
+                                        brain_plan_dict=corrected_plan,
                                     )
-
-                                    job["result"]["auto_correction"] = correction.to_dict()
-                                    _log(job, f"🔄 Auto-correction: gap={correction.total_gap:.0%}, pass={correction.pass_number}")
-
-                                    # Log per-stem corrections
-                                    for sname, sc in correction.stem_corrections.items():
-                                        if sc.needs_correction:
-                                            _log(job, f"  🎚️ {sname}: gap={sc.gap_score:.0%}")
-                                            for reason in sc.reasoning[:3]:
-                                                _log(job, f"    {reason}")
-
-                                    if correction.master_correction:
-                                        for reason in correction.master_correction.reasoning:
-                                            _log(job, f"  {reason}")
-
-                                    if correction.should_reprocess:
-                                        _log(job, "🔄 Gap detected — applying corrections for pass 2...")
-
-                                        # Merge corrections into brain plan
-                                        corrected_plan = dict(brain_plan_dict or {})
-                                        mc = correction.master_correction
-                                        if mc and mc.corrections:
-                                            # Apply LUFS correction
-                                            if "target_lufs_adjust" in mc.corrections:
-                                                corrected_plan["target_lufs"] = mc.corrections["target_lufs_adjust"]
-                                                _log(job, f"  → LUFS adjusted to {mc.corrections['target_lufs_adjust']:.1f}")
-
-                                            # Apply EQ corrections (append to existing mid bands)
-                                            if "eq_adjust" in mc.corrections:
-                                                existing = list(corrected_plan.get("mid_eq_bands", []))
-                                                for eq_fix in mc.corrections["eq_adjust"]:
-                                                    if isinstance(eq_fix, dict):
-                                                        freq = eq_fix.get("freq", 1000)
-                                                        gain = eq_fix.get("gain_db", 0)
-                                                        q = eq_fix.get("q", 1.0)
-                                                        existing.append((freq, gain, q))
-                                                        _log(job, f"  → EQ fix: {gain:+.1f}dB @{freq:.0f}Hz")
-                                                    else:
-                                                        existing.append(eq_fix)
-                                                corrected_plan["mid_eq_bands"] = existing
-
-                                        await asyncio.to_thread(
-                                            _run_in_subprocess,
-                                            _subprocess_master,
-                                            input_path=str(mix_path),
-                                            output_path=str(master_path),
-                                            target_lufs=corrected_plan.get("target_lufs", target_lufs),
-                                            bpm=plan.get("bpm", 120.0),
-                                            brain_plan_dict=corrected_plan,
-                                        )
-                                        _log(job, "✓ Re-mastered with corrections (pass 2)", "success")
-                                    else:
-                                        _log(job, "✓ Master passed quality check", "success")
-                            except Exception as ac_err:
-                                _log(job, f"Auto-correction skipped: {ac_err}", "warning")
-                    except Exception as e:
-                        _log(job, f"Mastering failed ({e}) — bypassing", "warning")
-                        # Fallback: copy mix to master
-                        import shutil
-                        shutil.copy2(mix_path, master_path)
-                        master_info = {"lufs": None, "method": "bypass"}
+                                    _log(job, "✓ Re-mastered with corrections (pass 2)", "success")
+                                else:
+                                    _log(job, "✓ Master passed quality check", "success")
+                        except Exception as ac_err:
+                            _log(job, f"Auto-correction skipped: {ac_err}", "warning")
+                except Exception as e:
+                    _log(job, f"Mastering failed ({e}) — bypassing", "warning")
+                    # Fallback: copy mix to master
+                    import shutil
+                    shutil.copy2(mix_path, master_path)
+                    master_info = {"lufs": None, "method": "bypass"}
             else:
                 master_info = {"status": "no_stems_to_mix"}
 
@@ -1583,7 +1594,11 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         job["status"] = "completed"
         _log(job, "═══════════════════════════════════", "stage")
         _log(job, f"✓ Pipeline complete — {len(rendered_stems)} stems, QC: {qc_result.get('overall_score', 0):.1f}%", "success")
-        job["result"] = {
+        # UPDATE (not replace!) — preserve intelligence data from earlier stages:
+        #   stem_analysis (HANDS), gap_report, brain_report, stem_decisions (CONSOLE)
+        if job.get("result") is None:
+            job["result"] = {}
+        job["result"].update({
             "analysis": {
                 "bpm": plan["bpm"],
                 "key": plan["key"],
@@ -1601,7 +1616,7 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 "master": str(master_path) if master_path.exists() else None,
                 "stems": list(rendered_stems.values()),
             },
-        }
+        })
 
         _save_jobs()  # persist final completed state
 
