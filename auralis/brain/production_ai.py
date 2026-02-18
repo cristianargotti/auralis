@@ -132,7 +132,7 @@ def render_track(
     arr_info = arrangement_summary(arrangement)
     _progress("grid", 1.0, f"Arrangement: {arrangement.total_bars} bars, {len(arrangement.sections)} sections")
 
-    # ── Step 3: Hands — Render Each Track ──
+    # ── Step 3: Hands — Render Each Track (Narrative Mode) ──
     _progress("hands", 0.0, "Rendering tracks...")
     stems: dict[str, str] = {}
     midi_files: dict[str, str] = {}
@@ -149,50 +149,78 @@ def render_track(
     for t_idx, track_name in enumerate(sorted(all_track_names)):
         _progress("hands", t_idx / total_tracks, f"Rendering {track_name}...")
 
-        # Collect all notes across sections for this track
-        all_notes: list[dict[str, float]] = []
-        for section in arrangement.sections:
+        # 🧠 Narrative Rendering: Combine sections with evolving sound design
+        # Instead of one giant render, we render section by section
+        # allowing the "Drop" to sound different from the "Intro".
+        
+        full_track_audio = []
+        current_time_s = 0.0
+
+        for section_idx, section in enumerate(arrangement.sections):
+            section_duration_s = section.template.bars * 4.0 * beat_duration
+            
+            # 1. Get notes for just this section
             if track_name not in section.patterns:
-                continue
-            pattern = section.patterns[track_name]
-            events = pattern_to_note_events(pattern, plan.bpm)
+                # Silence for this section
+                sr_len = int(section_duration_s * sample_rate)
+                section_audio = np.zeros(sr_len, dtype=np.float64)
+            else:
+                pattern = section.patterns[track_name]
+                events = pattern_to_note_events(pattern, plan.bpm)
+                
+                # 2. Select narrative-aware patch
+                # "What does the track need HERE?"
+                # e.g. Drop = Acid, Intro = Deep
+                from auralis.hands.synth import get_patch_for_stem
+                
+                # Special handling for drums (still procedural for now)
+                if track_name == "drums":
+                     voice = VoiceConfig() 
+                else:
+                    # Ask the narrative engine for the right sound
+                    patch = get_patch_for_stem(
+                        stem_name=track_name,
+                        style=section.template.name,  # "drop", "intro", "verse"
+                        bpm=plan.bpm,
+                        synth_patch=plan.synth_presets.get(track_name, "")
+                    )
+                    voice = patch.voice
+                
+                # 3. Render section
+                # Note: events are relative to 0.0 here, which is correct for section render
+                section_audio = render_midi_to_audio(events, sr=sample_rate, voice=voice)
+                
+                # Ensure exact length match
+                target_len = int(section_duration_s * sample_rate)
+                if len(section_audio) < target_len:
+                    # Pad
+                    section_audio = np.pad(section_audio, (0, target_len - len(section_audio)))
+                elif len(section_audio) > target_len:
+                    # Crop (carefully, maybe fade out? For now just crop)
+                    section_audio = section_audio[:target_len]
 
-            # Offset events by section start time
-            section_start_s = section.start_bar * 4.0 * beat_duration
-            for event in events:
-                event["start"] += section_start_s
-            all_notes.extend(events)
+            full_track_audio.append(section_audio)
 
-        if not all_notes:
-            continue
-
-        # Choose synth preset
-        preset_name = plan.synth_presets.get(track_name, "supersaw")
-        voice = PRESETS.get(preset_name, PRESETS["supersaw"]).voice if preset_name in PRESETS else VoiceConfig()
-
-        # Special handling for drums (use noise/pulse)
-        if track_name == "drums":
-            voice = VoiceConfig()  # Use default for drums
-
-        # Render audio from MIDI events
-        audio = render_midi_to_audio(all_notes, sr=sample_rate, voice=voice)
-
-        # Apply effect chain
+        # 4. Stitch sections (Crossfade Concat would be better, but simple concat for MVP)
+        # TODO: Implement crossfade_concat for seamless transitions
+        combined_audio = np.concatenate(full_track_audio)
+        
+        # Apply effect chain (Global for the track)
+        # In V2 we could have per-section FX too!
         chain_name = plan.effect_chains.get(track_name, "")
         if chain_name in PRESET_CHAINS:
-            audio = process_chain(audio, PRESET_CHAINS[chain_name], sample_rate, plan.bpm)
+            combined_audio = process_chain(combined_audio, PRESET_CHAINS[chain_name], sample_rate, plan.bpm)
 
-        track_audio[track_name] = audio
+        track_audio[track_name] = combined_audio
 
         # Save stem
         stem_path = out / f"stem_{track_name}.wav"
-        save_audio(audio, stem_path, sample_rate)
+        save_audio(combined_audio, stem_path, sample_rate)
         stems[track_name] = str(stem_path)
 
-        # Save MIDI for non-drum tracks
+        # Save MIDI (full linear MIDI for DAW export)
         if track_name != "drums":
             midi_path = out / f"midi_{track_name}.mid"
-            # Combine all patterns into one for saving
             from auralis.grid.midi import Pattern, Note
             combined = Pattern(name=track_name, notes=[], length_beats=arrangement.total_beats)
             for section in arrangement.sections:
@@ -207,7 +235,7 @@ def render_track(
             save_midi(combined, midi_path, plan.bpm)
             midi_files[track_name] = str(midi_path)
 
-    _progress("hands", 1.0, f"Rendered {len(stems)} tracks")
+    _progress("hands", 1.0, f"Rendered {len(stems)} tracks with narrative evolution")
 
     # ── Step 4: Mix ──
     _progress("mix", 0.0, "Mixing tracks...")

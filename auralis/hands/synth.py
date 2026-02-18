@@ -457,6 +457,18 @@ def get_patch_for_stem(
             return PRESETS["bass_reese"]
         if "sub" in style_lower or "808" in style_lower or bpm < 100:
             return PRESETS["bass_808"]
+        
+        # Section-based narrative logic
+        if "drop" in style_lower or "chorus" in style_lower:
+            # Drop needs energy/drive
+            return PRESETS["acid_303"] if bpm >= 128 else PRESETS["bass_reese"]
+        if "breakdown" in style_lower or "bridge" in style_lower:
+            # Breakdown needs tension/evolution
+            return PRESETS["bass_reese"]
+        if "intro" in style_lower or "verse" in style_lower:
+            # Intro/Verse needs steady foundation
+            return PRESETS["bass_808"]
+
         # Default: 808 for slow grooves, reese for energy
         return PRESETS["bass_808"] if bpm < 130 else PRESETS["bass_reese"]
 
@@ -474,6 +486,18 @@ def get_patch_for_stem(
             return PRESETS["pluck"]
         if "texture" in style_lower or "atmosphere" in style_lower:
             return PRESETS["texture_noise"]
+            
+        # Section-based narrative logic
+        if "breakdown" in style_lower or "intro" in style_lower:
+            # Start atmospheric
+            return PRESETS["pad_warm"]
+        if "drop" in style_lower or "chorus" in style_lower:
+            # Big energy
+            return PRESETS["supersaw"] if bpm >= 125 else PRESETS["keys_electric"]
+        if "verse" in style_lower:
+            # Melodic movement
+            return PRESETS["pluck"]
+
         # Default: pad for slow, pluck for fast
         return PRESETS["pad_warm"] if bpm < 120 else PRESETS["pluck"]
 
