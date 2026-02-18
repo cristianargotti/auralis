@@ -241,6 +241,13 @@ class Mixer:
         stereo_mix *= master_gain
 
         # Normalize to avoid clipping
+        # Safety: catch NaN from effects chain before it propagates
+        if np.any(np.isnan(stereo_mix)) or np.any(np.isinf(stereo_mix)):
+            import structlog
+            _logger = structlog.get_logger()
+            nan_pct = float(np.mean(np.isnan(stereo_mix))) * 100
+            _logger.error("mixer.nan_in_mix", nan_pct=f"{nan_pct:.1f}%")
+            stereo_mix = np.nan_to_num(stereo_mix, nan=0.0, posinf=1.0, neginf=-1.0)
         peak = np.max(np.abs(stereo_mix))
         if peak > 0.99:
             stereo_mix = stereo_mix / peak * 0.99

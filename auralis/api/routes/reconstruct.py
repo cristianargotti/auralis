@@ -134,7 +134,14 @@ def _run_in_subprocess(func, *args, **kwargs) -> Any:
 
     p = multiprocessing.Process(target=_target, args=(q,))
     p.start()
-    p.join()  # blocks until child exits (all memory freed)
+    p.join(timeout=600)  # 10 min max — prevents infinite hang on OOM/deadlock
+    if p.is_alive():
+        p.terminate()
+        p.join(timeout=10)
+        if p.is_alive():
+            p.kill()
+            p.join(timeout=5)
+        raise RuntimeError("Subprocess timed out after 600s — killed")
 
     if q.empty():
         raise RuntimeError(f"Subprocess died without result (exit code {p.exitcode})")
@@ -1394,6 +1401,8 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                     target_lufs = analysis.get("integrated_lufs", -14.0)
                     if not isinstance(target_lufs, (int, float)):
                         target_lufs = -14.0
+                    # Don't target quieter than -16 LUFS for reconstruction
+                    target_lufs = max(target_lufs, -16.0)
 
                     _log(job, f"💎 Mastering: target {target_lufs} LUFS")
                     _log(job, "  Chain: M/S EQ → Soft Clip → Multiband Sat → Harmonic Exciter")

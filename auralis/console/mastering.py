@@ -328,6 +328,11 @@ def master_audio(input_path: str | Path, output_path: str | Path | None = None,
         output_path = str(p.parent / f"{p.stem}_MASTER{p.suffix}")
 
     data, sr = sf.read(str(input_path), dtype="float64")
+    # Safety: reject corrupt input
+    if np.any(np.isnan(data)) or np.any(np.isinf(data)):
+        logger.error("mastering.nan_input", file=p.name,
+                     nan_pct=f"{float(np.mean(np.isnan(data)))*100:.1f}%")
+        data = np.nan_to_num(data, nan=0.0, posinf=1.0, neginf=-1.0)
     if data.ndim == 1:
         data = np.column_stack([data, data])
 
@@ -378,8 +383,13 @@ def master_audio(input_path: str | Path, output_path: str | Path | None = None,
         data = apply_multiband_compression(data, sr, brain_plan=bp); stages.append("compression")
 
     gain_needed = (config.target_lufs + 0.7) - _rms_db(data)
-    if gain_needed > 0:
+    if 0 < gain_needed < 40:  # Cap at +40dB to prevent amplifying silence/noise
         data *= 10 ** (gain_needed / 20)
+    elif gain_needed >= 40:
+        logger.error("mastering.input_too_quiet",
+                     gain_needed_db=round(gain_needed, 1),
+                     rms_db=round(_rms_db(data), 1),
+                     target_lufs=config.target_lufs)
     stages.append("makeup_gain")
 
     data = apply_stereo_width(data, config.width, sr); stages.append("stereo_width")

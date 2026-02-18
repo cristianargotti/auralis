@@ -11,6 +11,9 @@ from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
+import structlog
+
+logger = structlog.get_logger()
 
 
 # ── Effect Configs ───────────────────────────────────────
@@ -173,7 +176,7 @@ def apply_compressor(
         else:
             envelope = release_coeff * envelope + (1 - release_coeff) * level
 
-        if envelope > threshold:
+        if envelope > threshold and envelope > 1e-10:
             gain_reduction = threshold / envelope
             gain_reduction = gain_reduction ** (1 - 1 / config.ratio)
             output[i] *= gain_reduction
@@ -279,7 +282,7 @@ def apply_reverb(
         delay_samp = int(delay_ms * sr / 1000.0 * config.room_size)
         if delay_samp < 1:
             continue
-        feedback = config.room_size * (1 - config.damping * 0.4)
+        feedback = min(config.room_size * (1 - config.damping * 0.4), 0.95)
         n = len(audio)
         buf = np.zeros(n, dtype=np.float64)
         for i in range(n):
@@ -293,7 +296,7 @@ def apply_reverb(
     else:
         wet = audio.copy()
 
-    # Allpass filters
+    # Allpass filters (Schroeder design: out = -g*in + delayed; buf = in + g*delayed)
     allpass_delays_ms = [5.0, 1.7]
     for delay_ms in allpass_delays_ms:
         delay_samp = int(delay_ms * sr / 1000.0)
@@ -302,10 +305,12 @@ def apply_reverb(
         g = 0.7
         n = len(wet)
         out = np.zeros(n, dtype=np.float64)
+        buf_allpass = np.zeros(n, dtype=np.float64)
         for i in range(n):
             buf_idx = i - delay_samp
-            delayed = out[buf_idx] if buf_idx >= 0 else 0.0
-            out[i] = -g * wet[i] + delayed + g * delayed
+            delayed = buf_allpass[buf_idx] if buf_idx >= 0 else 0.0
+            out[i] = -g * wet[i] + delayed
+            buf_allpass[i] = wet[i] + g * delayed
         wet = out
 
     return audio * (1 - config.wet) + wet * config.wet
@@ -366,6 +371,20 @@ def process_chain(
 
     if chain.sidechain:
         output = apply_sidechain(output, chain.sidechain, sr, bpm)
+
+    # ── SAFETY NET: catch NaN/Inf from any DSP stage ──
+    if np.any(np.isnan(output)) or np.any(np.isinf(output)):
+        nan_count = int(np.sum(np.isnan(output)))
+        inf_count = int(np.sum(np.isinf(output)))
+        logger.error(
+            "process_chain.nan_detected",
+            chain=chain.name,
+            nan_count=nan_count,
+            inf_count=inf_count,
+            total_samples=len(output),
+        )
+        output = np.nan_to_num(output, nan=0.0, posinf=1.0, neginf=-1.0)
+        np.clip(output, -1.0, 1.0, out=output)
 
     return output
 
@@ -475,7 +494,7 @@ def apply_shimmer_reverb(
     # Base reverb (long decay)
     delay_ms_list = [31.0, 37.0, 41.0, 43.0, 53.0, 67.0]
     feedback = 0.3 + decay_s * 0.15  # longer decay = more feedback
-    feedback = min(feedback, 0.85)
+    feedback = min(feedback, 0.75)  # Safer ceiling to prevent accumulation
 
     reverb_buf = np.zeros(n + int(decay_s * sr), dtype=np.float64)
     reverb_buf[:n] = audio
@@ -486,6 +505,9 @@ def apply_shimmer_reverb(
             continue
         for i in range(d, len(reverb_buf)):
             reverb_buf[i] += reverb_buf[i - d] * feedback * (1 - damping * 0.3)
+            # Prevent runaway accumulation
+            if abs(reverb_buf[i]) > 4.0:
+                reverb_buf[i] = np.clip(reverb_buf[i], -4.0, 4.0)
 
     # Pitch shift via resampling (octave up = 2x speed, then stretch)
     shift_ratio = 2.0 ** (pitch_shift_semitones / 12.0)
