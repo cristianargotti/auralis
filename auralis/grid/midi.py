@@ -156,22 +156,36 @@ def generate_bassline(
     pattern_type: Literal["simple", "walking", "syncopated"] = "simple",
     bars: int = 4,
     velocity: int = 100,
+    energy: float = 0.5,  # 0-1 narrative energy
 ) -> Pattern:
     """Generate a bassline pattern."""
     scale_notes = get_scale_notes(root, scale, octave)
     notes: list[Note] = []
-    rng = random.Random(42)
+    rng = random.Random(42 + int(energy * 100))
+
+    # Narrative Override: Force simple patterns for low energy
+    if energy < 0.4:
+        pattern_type = "simple"
+    elif energy > 0.8:
+        pattern_type = "syncopated"
 
     for bar in range(bars):
         root_note = scale_notes[0]
 
         if pattern_type == "simple":
-            # Quarter notes on root
-            for beat in range(4):
+            # Low Energy: Sustained whole/half notes
+            if energy < 0.3:
                 notes.append(Note(
-                    pitch=root_note, start_beat=bar * 4.0 + beat,
-                    duration_beats=0.8, velocity=velocity,
+                    pitch=root_note, start_beat=bar * 4.0,
+                    duration_beats=4.0, velocity=velocity,
                 ))
+            else:
+                # Quarter notes on root
+                for beat in range(4):
+                    notes.append(Note(
+                        pitch=root_note, start_beat=bar * 4.0 + beat,
+                        duration_beats=0.8, velocity=velocity,
+                    ))
         elif pattern_type == "walking":
             # Walking bass — different scale notes per beat
             for beat in range(4):
@@ -181,8 +195,12 @@ def generate_bassline(
                     duration_beats=0.9, velocity=velocity - rng.randint(0, 20),
                 ))
         elif pattern_type == "syncopated":
-            # Syncopated pattern
+            # Syncopated pattern (16th note drive)
+            density = 6 if energy > 0.9 else 4
             hits = [0.0, 0.75, 1.5, 2.5, 3.0, 3.5]
+            if energy > 0.9:
+                hits = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]  # Rolling bass
+            
             for hit in hits:
                 note = rng.choice(scale_notes[:3])
                 notes.append(Note(
@@ -246,6 +264,7 @@ def generate_drum_pattern(
     style: Literal["four_on_floor", "breakbeat", "trap", "minimal"] = "four_on_floor",
     bars: int = 4,
     velocity: int = 100,
+    energy: float = 0.5,  # 0-1 narrative intensity
 ) -> Pattern:
     """Generate a drum pattern using GM drum map."""
     KICK = 36
@@ -260,42 +279,68 @@ def generate_drum_pattern(
     for bar in range(bars):
         offset = bar * 4.0
 
+        # narrative intensity control
+        has_kick = True
+        has_hats = energy > 0.3
+        has_snare = energy > 0.4
+        has_rides = energy > 0.8
+        has_ghosts = energy > 0.6
+
         if style == "four_on_floor":
             # Kick on every beat
-            for beat in range(4):
-                notes.append(Note(KICK, offset + beat, 0.1, velocity))
+            if has_kick:
+                for beat in range(4):
+                    notes.append(Note(KICK, offset + beat, 0.1, velocity))
+            
             # Snare/clap on 2 and 4
-            notes.append(Note(CLAP, offset + 1, 0.1, velocity - 10))
-            notes.append(Note(CLAP, offset + 3, 0.1, velocity - 10))
+            if has_snare:
+                notes.append(Note(CLAP, offset + 1, 0.1, velocity - 10))
+                notes.append(Note(CLAP, offset + 3, 0.1, velocity - 10))
+            
             # Hi-hats on 8ths
-            for i in range(8):
-                vel = velocity - 20 if i % 2 == 0 else velocity - 35
-                notes.append(Note(HIHAT_C, offset + i * 0.5, 0.05, vel))
+            if has_hats:
+                for i in range(8):
+                    vel = velocity - 20 if i % 2 == 0 else velocity - 35
+                    notes.append(Note(HIHAT_C, offset + i * 0.5, 0.05, vel))
+            
+            # Rides for high energy
+            if has_rides:
+                for i in range(8):
+                    notes.append(Note(RIDE, offset + i * 0.5, 0.05, velocity - 40))
 
         elif style == "breakbeat":
-            notes.append(Note(KICK, offset + 0, 0.1, velocity))
-            notes.append(Note(KICK, offset + 1.5, 0.1, velocity - 10))
-            notes.append(Note(KICK, offset + 2.75, 0.1, velocity - 5))
-            notes.append(Note(SNARE, offset + 1, 0.1, velocity))
-            notes.append(Note(SNARE, offset + 3, 0.1, velocity))
-            for i in range(8):
-                notes.append(Note(HIHAT_C, offset + i * 0.5, 0.05, velocity - 25))
+            if has_kick:
+                notes.append(Note(KICK, offset + 0, 0.1, velocity))
+                notes.append(Note(KICK, offset + 1.5, 0.1, velocity - 10))
+                notes.append(Note(KICK, offset + 2.75, 0.1, velocity - 5))
+            if has_snare:
+                notes.append(Note(SNARE, offset + 1, 0.1, velocity))
+                notes.append(Note(SNARE, offset + 3, 0.1, velocity))
+            if has_hats:
+                for i in range(8):
+                    notes.append(Note(HIHAT_C, offset + i * 0.5, 0.05, velocity - 25))
 
         elif style == "trap":
-            notes.append(Note(KICK, offset + 0, 0.2, velocity))
-            notes.append(Note(KICK, offset + 2.25, 0.2, velocity - 5))
-            notes.append(Note(SNARE, offset + 1, 0.1, velocity))
-            notes.append(Note(SNARE, offset + 3, 0.1, velocity))
-            # Rapid hi-hats
-            for i in range(16):
-                vel = velocity - 30 + random.randint(0, 15)
-                notes.append(Note(HIHAT_C, offset + i * 0.25, 0.05, vel))
+            if has_kick:
+                notes.append(Note(KICK, offset + 0, 0.2, velocity))
+                notes.append(Note(KICK, offset + 2.25, 0.2, velocity - 5))
+            if has_snare:
+                notes.append(Note(SNARE, offset + 1, 0.1, velocity))
+                notes.append(Note(SNARE, offset + 3, 0.1, velocity))
+            if has_hats:
+                # Rapid hi-hats
+                sub = 4 if energy > 0.7 else 2
+                for i in range(4 * sub):
+                    vel = velocity - 30 + random.randint(0, 15)
+                    notes.append(Note(HIHAT_C, offset + i * (1/sub), 0.05, vel))
 
         elif style == "minimal":
-            notes.append(Note(KICK, offset + 0, 0.1, velocity))
-            notes.append(Note(KICK, offset + 2, 0.1, velocity - 10))
-            notes.append(Note(HIHAT_C, offset + 1, 0.05, velocity - 30))
-            notes.append(Note(HIHAT_O, offset + 3, 0.1, velocity - 25))
+            if has_kick:
+                notes.append(Note(KICK, offset + 0, 0.1, velocity))
+                notes.append(Note(KICK, offset + 2, 0.1, velocity - 10))
+            if has_hats:
+                notes.append(Note(HIHAT_C, offset + 1, 0.05, velocity - 30))
+                notes.append(Note(HIHAT_O, offset + 3, 0.1, velocity - 25))
 
     return Pattern(
         name=f"Drums ({style})",

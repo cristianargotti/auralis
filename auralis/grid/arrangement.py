@@ -166,6 +166,7 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
                 style=template.drum_style,  # type: ignore[arg-type]
                 bars=template.bars,
                 velocity=int(70 + template.energy * 57),
+                energy=template.energy,  # Pass narrative energy
             )
 
         if template.has_bass:
@@ -176,6 +177,7 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
                 pattern_type=template.bass_style,  # type: ignore[arg-type]
                 bars=template.bars,
                 velocity=int(80 + template.energy * 47),
+                energy=template.energy,  # Pass narrative energy
             )
 
         if template.has_chords:
