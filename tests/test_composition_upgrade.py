@@ -1,5 +1,9 @@
 """Full verification of all 4 composition upgrades."""
 import sys
+sys.path.insert(0, "/Users/cristian.reyes/code/auralis")
+
+from unittest.mock import MagicMock
+sys.modules["structlog"] = MagicMock()
 
 print("=" * 60)
 print("AURALIS COMPOSITION UPGRADE — FULL VERIFICATION")

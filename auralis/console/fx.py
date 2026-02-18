@@ -49,10 +49,10 @@ def biquad_coefficients(
     """2nd-order IIR biquad filter coefficients (12dB/oct).
 
     Args:
-        filter_type: 'lowpass' or 'highpass'
-        cutoff_hz: filter cutoff frequency in Hz
+        filter_type: 'lowpass', 'highpass', 'bandpass', or 'notch'
+        cutoff_hz: filter cutoff/center frequency in Hz
         sr: sample rate
-        q: resonance (0.707 = Butterworth, flat response)
+        q: resonance (0.707 = Butterworth, higher = narrower)
 
     Returns:
         Tuple of (b0, b1, b2, a1, a2) normalized coefficients.
@@ -70,6 +70,14 @@ def biquad_coefficients(
         b0 = (1 + cos_w) / 2
         b1 = -(1 + cos_w)
         b2 = (1 + cos_w) / 2
+    elif filter_type == "bandpass":
+        b0 = alpha
+        b1 = 0.0
+        b2 = -alpha
+    elif filter_type == "notch":
+        b0 = 1.0
+        b1 = -2 * cos_w
+        b2 = 1.0
     else:
         msg = f"Unknown filter type: {filter_type}"
         raise ValueError(msg)
@@ -536,4 +544,250 @@ def apply_micro_fade(
     else:
         result[:fade_samples] *= fade_in
         result[-fade_samples:] *= fade_out
+    return result
+
+
+# ── Parametric EQ Band ──────────────────────────────────────
+
+
+def parametric_eq_coefficients(
+    center_hz: float,
+    gain_db: float,
+    q: float = 1.0,
+    sr: int = 44100,
+) -> BiquadCoeffs:
+    """Parametric peaking EQ band coefficients (boost or cut).
+
+    Args:
+        center_hz: Center frequency of the EQ band.
+        gain_db: +/- gain in dB (positive=boost, negative=cut).
+        q: Quality factor (0.5=wide, 1.0=normal, 4.0=surgical).
+        sr: Sample rate.
+
+    Returns:
+        Biquad coefficients for the peaking filter.
+    """
+    A = 10 ** (gain_db / 40)  # Square root of linear gain
+    omega = 2 * np.pi * center_hz / sr
+    sin_w = float(np.sin(omega))
+    cos_w = float(np.cos(omega))
+    alpha = sin_w / (2 * q)
+
+    b0 = 1 + alpha * A
+    b1 = -2 * cos_w
+    b2 = 1 - alpha * A
+    a0 = 1 + alpha / A
+    a1 = -2 * cos_w
+    a2 = 1 - alpha / A
+
+    return (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+
+
+def apply_parametric_eq(
+    data: AudioArray,
+    center_hz: float,
+    gain_db: float,
+    q: float = 1.0,
+    sr: int = 44100,
+) -> AudioArray:
+    """Apply a single parametric EQ band (peaking filter)."""
+    if abs(gain_db) < 0.1:
+        return data
+    coeffs = parametric_eq_coefficients(center_hz, gain_db, q, sr)
+    return apply_biquad(data, coeffs)
+
+
+# ── Dynamic EQ ──────────────────────────────────────────────
+
+
+class DynamicEQ:
+    """Frequency-aware dynamic processor — EQ that reacts to the material.
+
+    Unlike static EQ, DynamicEQ only attenuates frequencies that exceed
+    their target spectral envelope. Think of it as a multiband compressor
+    crossed with a parametric EQ: precise and transparent.
+
+    Use cases:
+    - Taming resonant peaks that only appear on certain notes
+    - Controlling mud in the 200-500Hz range without killing warmth
+    - De-essing dynamics (only attenuate sibilance when it spikes)
+    - Frequency carving: duck bass frequencies in a pad when bass hits
+
+    Args:
+        bands: List of (center_hz, threshold_db, ratio, q) tuples.
+        block_size: Analysis block size in samples (1024=responsive, 4096=smooth).
+    """
+
+    def __init__(
+        self,
+        bands: list[tuple[float, float, float, float]] | None = None,
+        block_size: int = 2048,
+    ) -> None:
+        # Default bands: sub, low-mid, mid, presence, air
+        self.bands = bands or [
+            (80.0, -6.0, 3.0, 0.8),     # Sub: gentle control
+            (300.0, -8.0, 2.5, 1.0),     # Low-mid: anti-mud
+            (2000.0, -10.0, 2.0, 1.2),   # Mid: presence control
+            (5000.0, -12.0, 3.0, 1.5),   # Presence: de-harsh
+            (10000.0, -14.0, 2.0, 0.8),  # Air: de-ess/brightness
+        ]
+        self.block_size = block_size
+
+    def process(
+        self,
+        data: AudioArray,
+        sr: int = 44100,
+    ) -> AudioArray:
+        """Process audio with dynamic EQ, reacting per-block.
+
+        For each analysis block:
+        1. Measure energy in each band
+        2. Compare against threshold
+        3. Apply gain reduction only when exceeded
+
+        Returns processed audio (same shape as input).
+        """
+        result = data.copy()
+        mono = result[:, 0] if result.ndim == 2 else result
+        n_samples = len(mono)
+
+        for center_hz, threshold_db, ratio, q in self.bands:
+            if center_hz <= 0 or center_hz >= sr / 2:
+                continue
+
+            threshold_lin = db_to_linear(threshold_db)
+            n_fft = self.block_size
+            # Bandpass filter to isolate the band
+            low_mult = 2 ** (-1 / (2 * q))
+            high_mult = 2 ** (1 / (2 * q))
+            low_hz = max(20, center_hz * low_mult)
+            high_hz = min(sr / 2 - 1, center_hz * high_mult)
+
+            # Process in blocks
+            for start in range(0, n_samples, self.block_size):
+                end = min(start + self.block_size, n_samples)
+                block = mono[start:end]
+                if len(block) < 64:
+                    continue
+
+                # Measure energy in this band via FFT
+                fft = np.fft.rfft(block)
+                freqs = np.fft.rfftfreq(len(block), 1 / sr)
+
+                # Find bins in band
+                band_mask = (freqs >= low_hz) & (freqs <= high_hz)
+                if not np.any(band_mask):
+                    continue
+
+                band_energy = np.sqrt(np.mean(np.abs(fft[band_mask]) ** 2))
+
+                # Only attenuate if above threshold
+                if band_energy > threshold_lin:
+                    over_db = 20 * np.log10(band_energy / max(threshold_lin, 1e-10))
+                    reduction_db = -(over_db * (1 - 1 / ratio))
+                    reduction_db = max(reduction_db, -12.0)  # Limit max reduction
+
+                    # Apply reduction via parametric EQ on this block
+                    if result.ndim == 2:
+                        for ch in range(result.shape[1]):
+                            ch_block = result[start:end, ch].copy()
+                            coeffs = parametric_eq_coefficients(
+                                center_hz, reduction_db, q, sr
+                            )
+                            result[start:end, ch] = apply_biquad(
+                                ch_block, coeffs
+                            )
+                    else:
+                        block_copy = result[start:end].copy()
+                        coeffs = parametric_eq_coefficients(
+                            center_hz, reduction_db, q, sr
+                        )
+                        result[start:end] = apply_biquad(block_copy, coeffs)
+
+        return result
+
+
+# ── Inter-Stem Frequency Carving ────────────────────────────
+
+
+def carve_frequencies(
+    target: AudioArray,
+    sidechain_source: AudioArray,
+    carve_bands: list[tuple[float, float]] | None = None,
+    depth_db: float = -6.0,
+    sr: int = 44100,
+) -> AudioArray:
+    """Duck specific frequencies in target when sidechain source has energy.
+
+    Classic mixing technique: cut 80-300Hz in pads when bass plays,
+    cut 2-5kHz in guitars when vocals are present, etc.
+
+    Args:
+        target: Audio to process (e.g., pad stem).
+        sidechain_source: Audio that triggers the ducking (e.g., bass stem).
+        carve_bands: List of (low_hz, high_hz) ranges to carve.
+                     Default: [(80, 300)] for bass/pad separation.
+        depth_db: Maximum attenuation when source is active.
+        sr: Sample rate.
+
+    Returns:
+        Processed target audio with carved frequencies.
+    """
+    if carve_bands is None:
+        carve_bands = [(80.0, 300.0)]
+
+    result = target.copy()
+    # Ensure same length
+    min_len = min(len(target), len(sidechain_source))
+    source_mono = sidechain_source[:min_len]
+    if source_mono.ndim == 2:
+        source_mono = np.mean(source_mono[:min_len], axis=1)
+    else:
+        source_mono = source_mono[:min_len]
+
+    block_size = 2048
+    depth_lin = db_to_linear(depth_db)
+
+    for low_hz, high_hz in carve_bands:
+        center_hz = (low_hz + high_hz) / 2
+        q = center_hz / max(high_hz - low_hz, 1.0)
+
+        for start in range(0, min_len, block_size):
+            end = min(start + block_size, min_len)
+            source_block = source_mono[start:end]
+            if len(source_block) < 64:
+                continue
+
+            # Measure source energy in band
+            fft = np.fft.rfft(source_block)
+            freqs = np.fft.rfftfreq(len(source_block), 1 / sr)
+            band_mask = (freqs >= low_hz) & (freqs <= high_hz)
+            if not np.any(band_mask):
+                continue
+
+            band_energy = np.sqrt(np.mean(np.abs(fft[band_mask]) ** 2))
+
+            # Scale reduction by source energy (0-1)
+            energy_norm = min(1.0, band_energy * 10)  # Normalize
+            if energy_norm < 0.1:
+                continue  # Source not active in this band
+
+            reduction_db = depth_db * energy_norm
+            reduction_db = max(reduction_db, -12.0)
+
+            # Apply cut to target in this band
+            if result.ndim == 2:
+                for ch in range(min(result.shape[1], 2)):
+                    ch_block = result[start:end, ch].copy()
+                    coeffs = parametric_eq_coefficients(
+                        center_hz, reduction_db, q, sr
+                    )
+                    result[start:end, ch] = apply_biquad(ch_block, coeffs)
+            else:
+                block_copy = result[start:end].copy()
+                coeffs = parametric_eq_coefficients(
+                    center_hz, reduction_db, q, sr
+                )
+                result[start:end] = apply_biquad(block_copy, coeffs)
+
     return result

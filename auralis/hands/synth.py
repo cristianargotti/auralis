@@ -215,6 +215,130 @@ def wavetable_oscillator(
     return output
 
 
+def audio_to_wavetable(
+    audio: NDArray[np.float64],
+    sr: int = 44100,
+    n_frames: int = 8,
+    frame_size: int = 2048,
+) -> NDArray[np.float64]:
+    """Extract a wavetable from real audio — import any sound as an oscillator.
+
+    Analyzes audio at evenly-spaced time points, extracting single-cycle
+    waveforms via FFT → keep top N harmonics → IFFT. The result is a 2D
+    array [n_frames × frame_size] that can be played as a wavetable
+    oscillator, morphing through the sound's timbral evolution.
+
+    Args:
+        audio: Input audio (mono). Any sound: vocal, guitar, field recording.
+        sr: Sample rate.
+        n_frames: Number of waveforms to extract (more = finer evolution).
+        frame_size: Samples per waveform frame (2048 = CD quality resolution).
+
+    Returns:
+        2D array [n_frames × frame_size] of normalized single-cycle waveforms.
+    """
+    if audio.ndim > 1:
+        audio = audio[:, 0]  # Force mono
+
+    n_samples = len(audio)
+    if n_samples < frame_size * 2:
+        # Audio too short — just use what we have
+        n_frames = 1
+
+    wavetable = np.zeros((n_frames, frame_size), dtype=np.float64)
+
+    # Extract frames at evenly-spaced positions
+    for i in range(n_frames):
+        # Position in audio
+        center = int((i + 0.5) / n_frames * n_samples)
+        start = max(0, center - frame_size // 2)
+        end = min(n_samples, start + frame_size)
+
+        # Extract and zero-pad if needed
+        chunk = audio[start:end]
+        if len(chunk) < frame_size:
+            padded = np.zeros(frame_size)
+            padded[: len(chunk)] = chunk
+            chunk = padded
+
+        # FFT → keep top N harmonics → IFFT (single-cycle waveform)
+        fft = np.fft.rfft(chunk)
+        magnitudes = np.abs(fft)
+
+        # Keep top 32 harmonics (removes noise, keeps character)
+        n_keep = min(32, len(magnitudes))
+        threshold = np.sort(magnitudes)[-n_keep] if len(magnitudes) > n_keep else 0
+        fft_clean = np.where(magnitudes >= threshold, fft, 0.0)
+
+        # Reconstruct single-cycle waveform
+        waveform = np.fft.irfft(fft_clean, n=frame_size)
+
+        # Normalize
+        peak = np.max(np.abs(waveform))
+        if peak > 0:
+            waveform /= peak
+
+        wavetable[i] = waveform
+
+    return wavetable
+
+
+def play_custom_wavetable(
+    wavetable: NDArray[np.float64],
+    freq_hz: float,
+    duration_s: float,
+    sr: int = 44100,
+    scan_rate: float = 0.5,
+) -> NDArray[np.float64]:
+    """Play a custom wavetable (from audio_to_wavetable) as an oscillator.
+
+    Morphs between frames in the wavetable at the given scan rate,
+    producing audio at the specified frequency.
+
+    Args:
+        wavetable: 2D array [n_frames × frame_size] from audio_to_wavetable.
+        freq_hz: Playback frequency.
+        duration_s: Duration in seconds.
+        sr: Sample rate.
+        scan_rate: How fast to scan through frames (Hz).
+
+    Returns:
+        Synthesized audio.
+    """
+    n_frames, frame_size = wavetable.shape
+    n_samples = int(duration_s * sr)
+    t = np.arange(n_samples, dtype=np.float64) / sr
+
+    # Phase accumulator for the oscillator
+    phase = (freq_hz * t) % 1.0  # 0-1 phase position in waveform
+
+    # Scan position through the wavetable (triangle wave)
+    scan = 0.5 * (1.0 + np.sin(2 * np.pi * scan_rate * t))
+    frame_idx = scan * (n_frames - 1)
+
+    # Synthesize by interpolating between waveform frames
+    output = np.zeros(n_samples, dtype=np.float64)
+    for s in range(n_samples):
+        # Which two frames are we between?
+        fi = frame_idx[s]
+        f0 = int(fi)
+        f1 = min(f0 + 1, n_frames - 1)
+        blend = fi - f0
+
+        # Sample position within the frame
+        sample_pos = phase[s] * frame_size
+        s0 = int(sample_pos) % frame_size
+        s1 = (s0 + 1) % frame_size
+        sample_blend = sample_pos - int(sample_pos)
+
+        # Bilinear interpolation (frame × sample)
+        val_f0 = wavetable[f0, s0] * (1 - sample_blend) + wavetable[f0, s1] * sample_blend
+        val_f1 = wavetable[f1, s0] * (1 - sample_blend) + wavetable[f1, s1] * sample_blend
+        output[s] = val_f0 * (1 - blend) + val_f1 * blend
+
+    return output
+
+
 def generate_oscillator(
     freq_hz: float,
     duration_s: float,
@@ -806,3 +930,207 @@ def save_audio(
         sf.write(str(p), audio, sr, subtype="PCM_24")
 
     return p
+
+
+# ── Modulation Matrix ───────────────────────────────────────
+
+
+@dataclass
+class ModSource:
+    """A modulation source signal generator.
+
+    Types:
+        lfo: Low-frequency oscillator (sine/triangle/saw)
+        envelope: ADSR shape (one-shot)
+        velocity: Note velocity (constant per note)
+        random: Per-note random value (constant per note)
+    """
+
+    type: str = "lfo"           # lfo, envelope, velocity, random
+    rate_hz: float = 1.0        # LFO rate (only for type=lfo)
+    shape: str = "sine"         # sine, triangle, saw (only for type=lfo)
+    attack_s: float = 0.01      # Envelope attack (only for type=envelope)
+    decay_s: float = 0.3        # Envelope decay (only for type=envelope)
+
+    def generate(
+        self,
+        duration_s: float,
+        sr: int = 44100,
+        velocity: float = 0.8,
+    ) -> NDArray[np.float64]:
+        """Generate modulation signal (0-1 range)."""
+        n = int(duration_s * sr)
+        t = np.linspace(0, duration_s, n, endpoint=False)
+
+        if self.type == "lfo":
+            phase = 2 * np.pi * self.rate_hz * t
+            if self.shape == "sine":
+                signal = (np.sin(phase) + 1) / 2  # 0-1
+            elif self.shape == "triangle":
+                signal = np.abs(2 * (t * self.rate_hz % 1) - 1)
+            elif self.shape == "saw":
+                signal = t * self.rate_hz % 1
+            else:
+                signal = (np.sin(phase) + 1) / 2
+            return signal
+
+        elif self.type == "envelope":
+            a_samp = min(int(self.attack_s * sr), n)
+            d_samp = min(int(self.decay_s * sr), n - a_samp)
+            env = np.zeros(n)
+            if a_samp > 0:
+                env[:a_samp] = np.linspace(0, 1, a_samp)
+            if d_samp > 0:
+                env[a_samp : a_samp + d_samp] = np.linspace(1, 0, d_samp)
+            return env
+
+        elif self.type == "velocity":
+            return np.full(n, velocity)
+
+        elif self.type == "random":
+            return np.full(n, np.random.random())
+
+        return np.zeros(n)
+
+
+@dataclass
+class ModRouting:
+    """A single routing: source → destination with depth."""
+
+    source: ModSource = field(default_factory=ModSource)
+    destination: str = "filter_cutoff"  # filter_cutoff, amplitude, pitch, pan
+    depth: float = 0.5  # 0-1 modulation depth
+    bipolar: bool = False  # True = ±depth, False = 0 to +depth
+
+
+@dataclass
+class ModMatrix:
+    """Modulation matrix: multiple source→destination routings.
+
+    Processes audio by applying modulation signals to synthesis
+    parameters. Operates post-synthesis on the rendered audio.
+
+    Example usage:
+        matrix = ModMatrix(routings=[
+            ModRouting(
+                source=ModSource(type="lfo", rate_hz=0.5, shape="sine"),
+                destination="filter_cutoff",
+                depth=0.6,
+            ),
+            ModRouting(
+                source=ModSource(type="lfo", rate_hz=4.0, shape="triangle"),
+                destination="amplitude",
+                depth=0.3,
+            ),
+        ])
+        processed = matrix.apply(audio, sr=44100, velocity=0.8, duration_s=2.0)
+    """
+
+    routings: list[ModRouting] = field(default_factory=list)
+
+    def apply(
+        self,
+        audio: NDArray[np.float64],
+        sr: int = 44100,
+        velocity: float = 0.8,
+        duration_s: float | None = None,
+        base_cutoff_hz: float = 5000.0,
+    ) -> NDArray[np.float64]:
+        """Apply all modulation routings to audio.
+
+        Args:
+            audio: Input audio (mono or stereo).
+            sr: Sample rate.
+            velocity: MIDI velocity for velocity source (0-1).
+            duration_s: Audio duration (computed from audio if None).
+            base_cutoff_hz: Base filter cutoff for filter_cutoff destination.
+
+        Returns:
+            Modulated audio.
+        """
+        if not self.routings:
+            return audio
+
+        result = audio.copy()
+        mono = result if result.ndim == 1 else result[:, 0]
+        n = len(mono)
+        dur = duration_s or n / sr
+
+        for routing in self.routings:
+            # Generate modulation signal
+            mod_signal = routing.source.generate(dur, sr, velocity)
+            if len(mod_signal) != n:
+                # Resample to match audio length
+                x_old = np.linspace(0, 1, len(mod_signal))
+                x_new = np.linspace(0, 1, n)
+                mod_signal = np.interp(x_new, x_old, mod_signal)
+
+            # Scale by depth
+            if routing.bipolar:
+                mod = (mod_signal - 0.5) * 2 * routing.depth  # -depth to +depth
+            else:
+                mod = mod_signal * routing.depth  # 0 to depth
+
+            # Apply to destination
+            if routing.destination == "amplitude":
+                # Modulate volume (tremolo/AM)
+                gain = 1.0 - routing.depth + mod  # Reduce base by depth, add mod back
+                if result.ndim == 2:
+                    result *= gain[:, np.newaxis]
+                else:
+                    result *= gain
+
+            elif routing.destination == "filter_cutoff":
+                # Modulate filter cutoff — apply lowpass with varying cutoff
+                from auralis.console.fx import apply_lowpass
+
+                block_size = 2048
+                for start in range(0, n, block_size):
+                    end = min(start + block_size, n)
+                    avg_mod = float(np.mean(mod[start:end]))
+                    cutoff = base_cutoff_hz * (1.0 + avg_mod)
+                    cutoff = max(80.0, min(cutoff, sr / 2 - 100))
+
+                    if result.ndim == 2:
+                        for ch in range(result.shape[1]):
+                            result[start:end, ch] = apply_lowpass(
+                                result[start:end, ch], cutoff, sr
+                            )
+                    else:
+                        result[start:end] = apply_lowpass(
+                            result[start:end], cutoff, sr
+                        )
+
+            elif routing.destination == "pitch":
+                # Pitch vibrato via resampling
+                from scipy.interpolate import interp1d
+
+                pitch_shift = mod * 0.02  # Max ±2% pitch shift
+                indices = np.arange(n, dtype=np.float64)
+                shifted_indices = indices + pitch_shift * sr * 0.001
+                shifted_indices = np.clip(shifted_indices, 0, n - 1)
+
+                if result.ndim == 2:
+                    for ch in range(result.shape[1]):
+                        interp_fn = interp1d(
+                            indices, result[:, ch],
+                            kind="linear", fill_value="extrapolate",
+                        )
+                        result[:, ch] = interp_fn(shifted_indices)
+                else:
+                    interp_fn = interp1d(
+                        indices, result,
+                        kind="linear", fill_value="extrapolate",
+                    )
+                    result = interp_fn(shifted_indices)
+
+            elif routing.destination == "pan":
+                # Stereo panning modulation (auto-pan)
+                if result.ndim == 1:
+                    # Convert to stereo for panning
+                    result = np.column_stack([result, result])
+                pan = 0.5 + mod * 0.5  # 0=left, 1=right
+                result[:, 0] *= np.cos(pan * np.pi / 2)
+                result[:, 1] *= np.sin(pan * np.pi / 2)
+
+        return result

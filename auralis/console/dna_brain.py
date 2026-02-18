@@ -146,6 +146,7 @@ class Evidence:
     fx_freq: dict[str, int] = field(default_factory=dict)
     vocal_effects: list[str] = field(default_factory=list)
     vocal_freq: dict[str, int] = field(default_factory=dict)
+    vocal_energy: float = 0.0  # 0-100 vocal presence level
     sidechain_ratio: float = 0.0
     avg_sections: float = 0.0
     ref_count: int = 0
@@ -228,18 +229,179 @@ def _score_candidate(
     context_fit: float,
     confidence: float,
     interaction_bonus: float = 0.0,
+    memory_bonus: float = 0.0,
 ) -> float:
-    """Weighted score across dimensions. All inputs 0-100."""
-    w_dna = 0.45
+    """Weighted score across dimensions. All inputs 0-100 (memory_bonus 0-20)."""
+    w_dna = 0.40
     w_ctx = 0.25
-    w_conf = 0.20
+    w_conf = 0.15
     w_int = 0.10
+    w_mem = 0.10  # Session memory weight
     return (
         dna_match * w_dna
         + context_fit * w_ctx
         + confidence * w_conf
         + interaction_bonus * w_int
+        + memory_bonus * w_mem * 5  # Scale 0-20 → 0-100 equivalent
     )
+
+
+def _select_with_creativity(
+    candidates: dict[str, float],
+    temperature: float = 0.3,
+) -> str:
+    """Select from candidates with controlled stochasticity.
+
+    Instead of always picking the highest score (deterministic),
+    uses softmax-weighted sampling so near-equal candidates have
+    a chance of being selected — introducing creative surprise.
+
+    temperature=0.0 → deterministic (always max)
+    temperature=0.3 → light creativity (top 2-3 compete)
+    temperature=1.0 → high randomness (all compete equally)
+    """
+    import random
+    import math
+
+    if not candidates:
+        return ""
+
+    if temperature <= 0.01:
+        return max(candidates, key=candidates.get)  # type: ignore[arg-type]
+
+    # Softmax with temperature
+    names = list(candidates.keys())
+    scores = [candidates[n] for n in names]
+    max_score = max(scores)
+
+    # Shift scores for numerical stability
+    exp_scores = []
+    for s in scores:
+        exponent = (s - max_score) / max(temperature * max_score, 1.0)
+        exp_scores.append(math.exp(min(exponent, 50)))  # cap to prevent overflow
+
+    total = sum(exp_scores)
+    if total <= 0:
+        return names[0]
+
+    probabilities = [e / total for e in exp_scores]
+
+    # Weighted random choice
+    r = random.random()
+    cumulative = 0.0
+    for name, prob in zip(names, probabilities):
+        cumulative += prob
+        if r <= cumulative:
+            return name
+
+    return names[-1]  # fallback
+
+
+# ── Emotional Arc Engine ─────────────────────────────────
+
+
+class EmotionalArc:
+    """Tracks energy flow across sections to create musical contrast.
+
+    A great production isn't just correct — it BREATHES. High-energy
+    sections need contrast with quieter moments. The arc engine
+    adjusts processing parameters to reinforce the emotional narrative:
+
+    - Breakdowns: wider reverb, less compression, more space
+    - Drops: tighter compression, more drive, narrower stereo
+    - Builds: increasing energy, rising filter cutoffs
+    - Intros/Outros: gentler processing, fade dynamics
+    """
+
+    # Section type → relative energy level (0-1)
+    ENERGY_MAP: dict[str, float] = {
+        "intro": 0.3,
+        "verse": 0.5,
+        "build": 0.7,
+        "chorus": 0.8,
+        "drop": 1.0,
+        "breakdown": 0.2,
+        "bridge": 0.4,
+        "outro": 0.25,
+    }
+
+    def __init__(self, section_type: str = "drop") -> None:
+        self.section_type = section_type.lower()
+        self.energy = self.ENERGY_MAP.get(self.section_type, 0.6)
+
+    def adjust_stem_plan(
+        self, plan: "StemPlan", stem_name: str
+    ) -> list[str]:
+        """Adjust a stem plan based on emotional context. Returns reasoning."""
+        adjustments: list[str] = []
+
+        if self.energy <= 0.3:  # Low energy (breakdown, intro, outro)
+            # Wider, more spacious, less compressed
+            if plan.compression:
+                plan.compression["ratio"] = min(
+                    plan.compression.get("ratio", 2.0), 2.0
+                )
+                adjustments.append(
+                    f"ARC: {self.section_type} → gentle compression (ratio≤2:1)"
+                )
+            if stem_name in ("vocals", "other"):
+                plan.stereo_width = min(plan.stereo_width + 0.3, 2.0)
+                adjustments.append(
+                    f"ARC: {self.section_type} → wider stereo ({plan.stereo_width:.1f})"
+                )
+            if "hall_reverb" not in plan.fx_chain and stem_name != "bass":
+                plan.fx_chain.append("hall_reverb")
+                adjustments.append(
+                    f"ARC: {self.section_type} → added hall reverb for space"
+                )
+
+        elif self.energy >= 0.8:  # High energy (drop, chorus)
+            # Tighter, more aggressive, focused
+            if plan.compression:
+                plan.compression["ratio"] = max(
+                    plan.compression.get("ratio", 4.0), 4.0
+                )
+                plan.compression["attack_ms"] = min(
+                    plan.compression.get("attack_ms", 10.0), 10.0
+                )
+                adjustments.append(
+                    f"ARC: {self.section_type} → aggressive compression (ratio≥4:1, attack≤10ms)"
+                )
+            if stem_name == "bass" and not plan.sidechain:
+                plan.sidechain = True
+                adjustments.append(
+                    f"ARC: {self.section_type} → bass sidechain for punch"
+                )
+
+        elif 0.6 <= self.energy < 0.8:  # Medium-high (build, verse 2)
+            # Building energy — moderate processing
+            if "saturation" not in plan.fx_chain and stem_name in ("drums", "bass"):
+                plan.fx_chain.append("saturation")
+                adjustments.append(
+                    f"ARC: {self.section_type} → added saturation for warmth"
+                )
+
+        return adjustments
+
+    def adjust_master_plan(self, master: "MasterPlan") -> list[str]:
+        """Adjust mastering parameters based on emotional context."""
+        adjustments: list[str] = []
+
+        if self.energy <= 0.3:
+            # Breakdowns: less drive, more width
+            master.drive = min(master.drive, 1.0)
+            master.width = min(master.width + 0.2, 2.0)
+            adjustments.append(
+                f"ARC: {self.section_type} → master: less drive, wider image"
+            )
+        elif self.energy >= 0.8:
+            # Drops: more drive, controlled width
+            master.drive = max(master.drive, 2.0)
+            adjustments.append(
+                f"ARC: {self.section_type} → master: drive≥2.0 for impact"
+            )
+
+        return adjustments
 
 
 # ── Stem Thinkers ───────────────────────────────────────
@@ -303,7 +465,7 @@ def _think_drums(ev: Evidence) -> StemPlan:
         confidence=conf,
     )
 
-    best_style = max(candidates, key=candidates.get)  # type: ignore[arg-type]
+    best_style = _select_with_creativity(candidates, temperature=0.3)
     plan.style = best_style
     plan.confidence = candidates[best_style] / 100
 
@@ -902,8 +1064,23 @@ class DNABrain:
     """Multi-dimensional reasoning engine for Auralis.
 
     Instead of hardcoded if/else trees, scores candidate options across
-    DNA match, context fit, confidence, and cross-stem interactions.
+    DNA match, context fit, confidence, cross-stem interactions,
+    session memory, and emotional arc.
     """
+
+    def __init__(self) -> None:
+        self._memory: Any | None = None
+
+    @property
+    def memory(self) -> Any:
+        """Lazy-load session memory."""
+        if self._memory is None:
+            try:
+                from auralis.brain.memory import SessionMemory
+                self._memory = SessionMemory()
+            except Exception:
+                self._memory = None
+        return self._memory
 
     def think(
         self,
@@ -911,18 +1088,43 @@ class DNABrain:
         stem_analysis: dict[str, dict[str, Any]] | None = None,
         gap_report: dict[str, Any] | None = None,
         ear_data: dict[str, Any] | None = None,
+        section_type: str = "drop",
+        creativity: float = 0.3,
     ) -> BrainReport:
         """Run full reasoning across all stems and mastering.
 
-        Returns a BrainReport with optimal plans and reasoning chains.
+        Args:
+            deep_profile: DNA profile from reference analysis.
+            stem_analysis: Per-stem audio analysis.
+            gap_report: Gap analysis between source and references.
+            ear_data: EAR module analysis data.
+            section_type: Current section (intro/verse/build/drop/breakdown/outro).
+                         Used by EmotionalArc to adjust processing.
+            creativity: 0.0-1.0 temperature for stochastic selection.
+                       0.0 = deterministic, 0.3 = light creativity, 1.0 = wild.
+
+        Returns:
+            BrainReport with optimal plans and reasoning chains.
         """
         ev = _gather_evidence(deep_profile, ear_data)
         reasoning: list[str] = []
 
+        # ── Emotional arc ──
+        arc = EmotionalArc(section_type)
         reasoning.append(
-            f"🧠 DNABrain thinking... ({ev.deep_count}/{ev.ref_count} refs with deep DNA, "
-            f"confidence={_confidence(ev):.0%})"
+            f"🧠 DNABrain thinking... ({ev.deep_count}/{ev.ref_count} refs, "
+            f"confidence={_confidence(ev):.0%}, section='{section_type}', "
+            f"energy={arc.energy:.0%}, creativity={creativity:.0%})"
         )
+
+        # ── Memory check ──
+        mem = self.memory
+        if mem and mem.session_count > 0:
+            summary = mem.summary()
+            reasoning.append(
+                f"  📚 Memory: {summary['sessions']} sessions, "
+                f"avg QC={summary['avg_qc']:.0f}"
+            )
 
         # ── Think about each stem ──
         stem_plans: dict[str, StemPlan] = {}
@@ -950,8 +1152,18 @@ class DNABrain:
             f"width={other_plan.stereo_width:.1f} (conf={other_plan.confidence:.0%})"
         )
 
+        # ── Emotional Arc adjustments ──
+        reasoning.append(f"  🎭 Emotional Arc: {section_type} (energy={arc.energy:.0%})")
+        for stem_name, plan in stem_plans.items():
+            arc_adjustments = arc.adjust_stem_plan(plan, stem_name)
+            for adj in arc_adjustments:
+                reasoning.append(f"    → {adj}")
+
         # ── Think about mastering ──
         master_plan = _think_master(ev)
+        arc_master_adj = arc.adjust_master_plan(master_plan)
+        for adj in arc_master_adj:
+            reasoning.append(f"    → {adj}")
         reasoning.append(
             f"  💎 Master: LUFS={master_plan.target_lufs:.1f}, "
             f"drive={master_plan.drive:.1f}, width={master_plan.width:.1f}"
@@ -973,6 +1185,9 @@ class DNABrain:
             stems=len(stem_plans),
             confidence=_confidence(ev),
             interactions=len(interaction_log),
+            section=section_type,
+            energy=arc.energy,
+            creativity=creativity,
         )
 
         return BrainReport(

@@ -431,3 +431,198 @@ def evaluate_and_correct(
         )
 
     return report
+
+
+# ── Mix Recall Learning ─────────────────────────────────
+
+
+@dataclass
+class CorrectionOutcome:
+    """Recorded outcome of a correction pass."""
+
+    band_name: str = ""
+    correction_db: float = 0.0
+    gap_before: float = 0.0
+    gap_after: float = 0.0
+    improved: bool = False
+    bpm: float = 120.0
+    key: str = "C"
+
+
+class MixRecallMemory:
+    """Learns from correction outcomes to suggest proactive EQ adjustments.
+
+    After each correction pass, records which band corrections worked
+    (reduced the gap) and which didn't. Over time, builds a knowledge
+    base of proven corrections per genre/BPM/key.
+
+    Storage: ~/.auralis/mix_recall.json
+    """
+
+    def __init__(self) -> None:
+        import json
+        self._memory_dir = Path.home() / ".auralis"
+        self._memory_file = self._memory_dir / "mix_recall.json"
+        self._outcomes: list[dict[str, Any]] = []
+        self._load()
+
+    def _load(self) -> None:
+        import json
+        if self._memory_file.exists():
+            try:
+                data = json.loads(self._memory_file.read_text())
+                self._outcomes = data.get("outcomes", [])
+            except Exception:
+                self._outcomes = []
+
+    def save(self) -> None:
+        import json
+        try:
+            self._memory_dir.mkdir(parents=True, exist_ok=True)
+            data = {"outcomes": self._outcomes[-200:]}  # Keep last 200
+            self._memory_file.write_text(json.dumps(data, indent=2))
+        except Exception:
+            pass
+
+    def record_outcome(
+        self,
+        report: CorrectionReport,
+        gap_after: float,
+        bpm: float = 120.0,
+        key: str = "C",
+    ) -> None:
+        """Record correction results for learning.
+
+        Call after applying corrections and re-evaluating the mix.
+
+        Args:
+            report: The CorrectionReport that was applied.
+            gap_after: Total gap score AFTER applying corrections.
+            bpm: Track BPM.
+            key: Track key.
+        """
+        if not report.master_correction:
+            return
+
+        gap_before = report.total_gap
+        improved = gap_after < gap_before
+
+        # Record per-band corrections from master
+        for band_name, correction_data in report.master_correction.corrections.items():
+            if isinstance(correction_data, dict) and "gain_db" in correction_data:
+                outcome = {
+                    "band_name": band_name,
+                    "correction_db": correction_data["gain_db"],
+                    "gap_before": round(gap_before, 3),
+                    "gap_after": round(gap_after, 3),
+                    "improved": improved,
+                    "bpm": bpm,
+                    "key": key,
+                }
+                self._outcomes.append(outcome)
+
+        # Record per-stem corrections
+        for stem_name, stem_result in report.stem_corrections.items():
+            if not stem_result.needs_correction:
+                continue
+            for band_name, correction_data in stem_result.corrections.items():
+                if isinstance(correction_data, dict) and "gain_db" in correction_data:
+                    outcome = {
+                        "band_name": f"{stem_name}_{band_name}",
+                        "correction_db": correction_data["gain_db"],
+                        "gap_before": round(gap_before, 3),
+                        "gap_after": round(gap_after, 3),
+                        "improved": improved,
+                        "bpm": bpm,
+                        "key": key,
+                    }
+                    self._outcomes.append(outcome)
+
+        self.save()
+        logger.info(
+            "mix_recall.recorded",
+            gap_before=gap_before,
+            gap_after=gap_after,
+            improved=improved,
+        )
+
+    def suggest_corrections(
+        self,
+        bpm: float = 120.0,
+        key: str = "C",
+        min_confidence: int = 3,
+    ) -> list[BandCorrection]:
+        """Suggest proactive corrections based on past successes.
+
+        Analyzes stored outcomes to find corrections that consistently
+        improved the mix at similar BPM/key. Returns suggestions only
+        when there's enough confidence (min_confidence successful outcomes).
+
+        Args:
+            bpm: Current track BPM.
+            key: Current track key.
+            min_confidence: Minimum successful outcomes needed.
+
+        Returns:
+            List of BandCorrection suggestions.
+        """
+        if not self._outcomes:
+            return []
+
+        # Group by band and find average successful correction
+        band_stats: dict[str, list[float]] = {}
+
+        for outcome in self._outcomes:
+            if not outcome.get("improved", False):
+                continue
+
+            # BPM proximity (within 15 BPM = relevant)
+            bpm_diff = abs(outcome.get("bpm", 120) - bpm)
+            if bpm_diff > 15:
+                continue
+
+            band = outcome["band_name"]
+            gain = outcome.get("correction_db", 0.0)
+            if abs(gain) > 0.1:
+                band_stats.setdefault(band, []).append(gain)
+
+        # Build suggestions from confident patterns
+        suggestions = []
+        for band_name, gains in band_stats.items():
+            if len(gains) < min_confidence:
+                continue
+
+            avg_gain = sum(gains) / len(gains)
+            # Use conservative gain (50% of average) to avoid over-correction
+            safe_gain = avg_gain * 0.5
+
+            if abs(safe_gain) < 0.3:
+                continue
+
+            # Map band name to center frequency
+            freq_map = {
+                "sub": 40.0, "low": 100.0, "low_mid": 350.0,
+                "mid": 1000.0, "upper_mid": 3000.0,
+                "presence": 6000.0, "brilliance": 12000.0,
+            }
+            # Try to extract base band name (strip stem prefix)
+            base_band = band_name.split("_", 1)[-1] if "_" in band_name else band_name
+            center_freq = freq_map.get(base_band, freq_map.get(band_name, 1000.0))
+
+            suggestions.append(BandCorrection(
+                band_name=band_name,
+                center_freq=center_freq,
+                gain_db=round(safe_gain, 1),
+                q=1.0,
+            ))
+
+        logger.info(
+            "mix_recall.suggestions",
+            n_suggestions=len(suggestions),
+            total_outcomes=len(self._outcomes),
+        )
+        return suggestions
+
+    @property
+    def outcome_count(self) -> int:
+        return len(self._outcomes)
