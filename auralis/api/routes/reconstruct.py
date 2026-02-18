@@ -772,18 +772,96 @@ def _subprocess_master(input_path: str, output_path: str, target_lufs: float, bp
 
 @router.get("/jobs")
 async def list_jobs() -> list[dict[str, Any]]:
-    """List all reconstruction jobs."""
-    return [
-        {
+    """List all reconstruction jobs with rich metadata."""
+    items: list[dict[str, Any]] = []
+    for j in _reconstruct_jobs.values():
+        project_id = j["project_id"]
+        project_dir = Path("/app/projects") / project_id
+        result = j.get("result") or {}
+
+        # Disk size
+        disk_bytes = 0
+        file_count = 0
+        if project_dir.exists():
+            for f in project_dir.rglob("*"):
+                if f.is_file():
+                    disk_bytes += f.stat().st_size
+                    file_count += 1
+
+        # Created timestamp (from project dir mtime or fallback)
+        created_at = None
+        if project_dir.exists():
+            created_at = project_dir.stat().st_mtime
+
+        # File availability
+        files = result.get("files") or {}
+
+        # Analysis data
+        analysis = result.get("analysis") or {}
+        qc = result.get("qc") or {}
+
+        items.append({
             "job_id": j["job_id"],
-            "project_id": j["project_id"],
+            "project_id": project_id,
             "status": j["status"],
             "stage": j["stage"],
             "progress": j["progress"],
             "cleaned": j.get("cleaned", False),
-        }
-        for j in _reconstruct_jobs.values()
-    ]
+            "disk_size_mb": round(disk_bytes / (1024 * 1024), 1),
+            "file_count": file_count,
+            "created_at": created_at,
+            "has_master": bool(files.get("master")),
+            "has_mix": bool(files.get("mix")),
+            "has_original": bool(files.get("original")),
+            "has_stems": bool(files.get("stems")),
+            "has_brain": "brain_report" in result,
+            "has_stem_analysis": "stem_analysis" in result,
+            "bpm": analysis.get("bpm"),
+            "key": analysis.get("key"),
+            "scale": analysis.get("scale"),
+            "duration": analysis.get("duration"),
+            "qc_score": qc.get("overall_score"),
+            "qc_passed": qc.get("passed"),
+        })
+
+    # Sort by created_at descending (newest first)
+    items.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+    return items
+
+
+@router.get("/projects/stats")
+async def get_project_stats() -> dict[str, Any]:
+    """Get aggregate stats for all projects."""
+    projects_dir = Path("/app/projects")
+    total_bytes = 0
+    project_count = 0
+
+    if projects_dir.exists():
+        for d in projects_dir.iterdir():
+            if d.is_dir() and d.name != "_reference_bank":
+                project_count += 1
+                for f in d.rglob("*"):
+                    if f.is_file():
+                        total_bytes += f.stat().st_size
+
+    completed = sum(1 for j in _reconstruct_jobs.values() if j["status"] == "completed")
+    running = sum(1 for j in _reconstruct_jobs.values() if j["status"] == "running")
+    errored = sum(1 for j in _reconstruct_jobs.values() if j["status"] == "error")
+    with_brain = sum(
+        1 for j in _reconstruct_jobs.values()
+        if "brain_report" in (j.get("result") or {})
+    )
+
+    return {
+        "total_projects": project_count,
+        "total_disk_gb": round(total_bytes / (1024 ** 3), 2),
+        "total_disk_mb": round(total_bytes / (1024 ** 2), 0),
+        "total_jobs": len(_reconstruct_jobs),
+        "completed": completed,
+        "running": running,
+        "errored": errored,
+        "with_intelligence": with_brain,
+    }
 
 
 # ── Pipeline execution (track-agnostic) ─────────────────

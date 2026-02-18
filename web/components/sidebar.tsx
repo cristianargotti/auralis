@@ -12,6 +12,12 @@ const NAV_ITEMS = [
         description: "Projects & activity",
     },
     {
+        label: "Projects",
+        href: "/projects",
+        icon: "📁",
+        description: "Manage all tracks",
+    },
+    {
         label: "Architecture",
         href: "/architecture",
         icon: "🏗️",
