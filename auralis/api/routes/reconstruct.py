@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -366,8 +366,14 @@ async def get_audio_file(
     job_id: str,
     file_key: str,
     request: Request,
+    fmt: str = Query("mp3", alias="format"),
 ):
-    """Stream audio file with HTTP Range support for instant playback."""
+    """Stream audio file. Serves MP3 by default for fast playback.
+    
+    Query params:
+        format=mp3  (default) — compressed, ~10x smaller, instant playback
+        format=wav  — lossless original for downloads
+    """
     if job_id not in _reconstruct_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -388,9 +394,43 @@ async def get_audio_file(
     if file_key not in file_map:
         raise HTTPException(status_code=400, detail="Invalid file key")
         
-    file_path = project_dir / file_map[file_key]
-    if not file_path.exists():
+    wav_path = project_dir / file_map[file_key]
+    if not wav_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
+
+    # Determine which file to serve
+    if fmt == "wav":
+        file_path = wav_path
+        media_type = "audio/wav"
+    else:
+        # Auto-convert to MP3 if not cached
+        mp3_path = wav_path.with_suffix(".mp3")
+        if not mp3_path.exists():
+            import subprocess
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", str(wav_path),
+                        "-codec:a", "libmp3lame", "-b:a", "192k",
+                        "-map_metadata", "-1",  # strip metadata for smaller file
+                        str(mp3_path),
+                    ],
+                    capture_output=True, timeout=120, check=True,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                # Fallback to WAV if conversion fails
+                import logging
+                logging.getLogger("auralis").warning(f"MP3 conversion failed: {e}")
+                file_path = wav_path
+                media_type = "audio/wav"
+                mp3_path = None  # type: ignore[assignment]
+
+        if mp3_path and mp3_path.exists():
+            file_path = mp3_path
+            media_type = "audio/mpeg"
+        else:
+            file_path = wav_path
+            media_type = "audio/wav"
 
     file_size = file_path.stat().st_size
     range_header = request.headers.get("range")
@@ -418,7 +458,7 @@ async def get_audio_file(
         return StreamingResponse(
             iter_range(),
             status_code=206,
-            media_type="audio/wav",
+            media_type=media_type,
             headers={
                 "Content-Range": f"bytes {start}-{end}/{file_size}",
                 "Accept-Ranges": "bytes",
@@ -429,7 +469,7 @@ async def get_audio_file(
     # No Range header — full file with Accept-Ranges hint
     return FileResponse(
         file_path,
-        media_type="audio/wav",
+        media_type=media_type,
         headers={"Accept-Ranges": "bytes"},
     )
 

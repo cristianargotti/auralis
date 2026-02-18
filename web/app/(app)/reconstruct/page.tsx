@@ -844,65 +844,35 @@ export default function ReconstructPage() {
                             <div className="flex flex-wrap gap-2">
                                 {/* Master — primary */}
                                 {job.result.files?.master && (
-                                    <button
-                                        onClick={async () => {
-                                            try {
-                                                const res = await apiFetch(`/api/reconstruct/audio/${job.job_id}/master`);
-                                                const blob = await res.blob();
-                                                const url = URL.createObjectURL(blob);
-                                                const a = document.createElement("a");
-                                                a.href = url;
-                                                a.download = "master.wav";
-                                                a.click();
-                                                URL.revokeObjectURL(url);
-                                            } catch (e) { console.error("Download failed", e); }
-                                        }}
+                                    <a
+                                        href={`/api/reconstruct/audio/${job.job_id}/master?format=wav`}
+                                        download="master.wav"
                                         className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-purple-600/20 to-violet-600/20 border border-purple-500/30 text-purple-300 hover:text-purple-200 hover:border-purple-500/50 transition-all text-sm font-medium cursor-pointer"
                                     >
                                         💎 Master WAV
-                                    </button>
+                                    </a>
                                 )}
 
                                 {/* Original */}
                                 {job.result.files?.original && (
-                                    <button
-                                        onClick={async () => {
-                                            try {
-                                                const res = await apiFetch(`/api/reconstruct/audio/${job.job_id}/original`);
-                                                const blob = await res.blob();
-                                                const url = URL.createObjectURL(blob);
-                                                const a = document.createElement("a");
-                                                a.href = url;
-                                                a.download = "original.wav";
-                                                a.click();
-                                                URL.revokeObjectURL(url);
-                                            } catch (e) { console.error("Download failed", e); }
-                                        }}
+                                    <a
+                                        href={`/api/reconstruct/audio/${job.job_id}/original?format=wav`}
+                                        download="original.wav"
                                         className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800/50 border border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-all text-xs cursor-pointer"
                                     >
                                         🎵 Original
-                                    </button>
+                                    </a>
                                 )}
 
                                 {/* Mix */}
                                 {job.result.files?.mix && (
-                                    <button
-                                        onClick={async () => {
-                                            try {
-                                                const res = await apiFetch(`/api/reconstruct/audio/${job.job_id}/mix`);
-                                                const blob = await res.blob();
-                                                const url = URL.createObjectURL(blob);
-                                                const a = document.createElement("a");
-                                                a.href = url;
-                                                a.download = "mix.wav";
-                                                a.click();
-                                                URL.revokeObjectURL(url);
-                                            } catch (e) { console.error("Download failed", e); }
-                                        }}
+                                    <a
+                                        href={`/api/reconstruct/audio/${job.job_id}/mix?format=wav`}
+                                        download="mix.wav"
                                         className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800/50 border border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-all text-xs cursor-pointer"
                                     >
                                         🎚️ Mix
-                                    </button>
+                                    </a>
                                 )}
 
                                 {/* Stems */}
@@ -912,24 +882,14 @@ export default function ReconstructPage() {
                                     { stem: "vocals", icon: "🎤", cls: "bg-purple-600/10 border-purple-500/30 text-purple-400" },
                                     { stem: "other", icon: "🎹", cls: "bg-emerald-600/10 border-emerald-500/30 text-emerald-400" },
                                 ].map(({ stem, icon, cls }) => (
-                                    <button
+                                    <a
                                         key={stem}
-                                        onClick={async () => {
-                                            try {
-                                                const res = await apiFetch(`/api/reconstruct/audio/${job.job_id}/stem_${stem}`);
-                                                const blob = await res.blob();
-                                                const url = URL.createObjectURL(blob);
-                                                const a = document.createElement("a");
-                                                a.href = url;
-                                                a.download = `${stem}.wav`;
-                                                a.click();
-                                                URL.revokeObjectURL(url);
-                                            } catch (e) { console.error("Download failed", e); }
-                                        }}
+                                        href={`/api/reconstruct/audio/${job.job_id}/stem_${stem}?format=wav`}
+                                        download={`${stem}.wav`}
                                         className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:brightness-125 transition-all text-xs cursor-pointer ${cls}`}
                                     >
                                         {icon} {stem.charAt(0).toUpperCase() + stem.slice(1)}
-                                    </button>
+                                    </a>
                                 ))}
                             </div>
 
