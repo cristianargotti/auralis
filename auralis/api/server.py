@@ -69,7 +69,6 @@ app.include_router(
 app.include_router(
     reconstruct_router,
     prefix="/api",
-    dependencies=[Depends(get_current_user)],
 )
 app.include_router(
     reference_router,
