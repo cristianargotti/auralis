@@ -49,7 +49,9 @@ class ProductionPlan:
     structure: list[str]
     synth_presets: dict[str, str]  # track_name -> preset_name
     effect_chains: dict[str, str]  # track_name -> chain_name
-    fx_plan: list[dict[str, Any]] = field(default_factory=list)  # AI-generated FX automation
+    fx_plan: list[dict[str, Any]] = field(default_factory=list)
+    mix_plan: dict[str, dict[str, Any]] = field(default_factory=dict)  # AI-decided mix
+    section_details: list[dict[str, Any]] = field(default_factory=list)  # AI-decided per-section
     description: str = ""
     raw_response: str = ""
 
@@ -129,27 +131,30 @@ When generating a production plan, respond with this exact JSON structure:
                 "start": 0.1,
                 "end": 0.6
             }
-        },
-        {
-            "section": "buildup",
-            "effect": "filter_sweep",
-            "target": "bass",
-            "why": "Build tension before the drop",
-            "params": {"filter_type": "highpass", "start_hz": 100, "end_hz": 8000, "resonance": 1.5},
-            "automation": {
-                "param": "cutoff_hz",
-                "curve": "exponential",
-                "start": 100,
-                "end": 8000
-            }
         }
+    ],
+    "mix_plan": {
+        "drums": {"volume_db": -2.0, "pan": 0.0, "reverb_send": 0.0},
+        "bass": {"volume_db": 0.0, "pan": 0.0, "reverb_send": 0.0},
+        "chords": {"volume_db": -4.0, "pan": -0.25, "reverb_send": 0.3},
+        "melody": {"volume_db": -1.0, "pan": 0.2, "reverb_send": 0.2}
+    },
+    "section_details": [
+        {"name": "intro", "bars": 8, "energy": 0.3},
+        {"name": "verse", "bars": 16, "energy": 0.5},
+        {"name": "breakdown", "bars": 8, "energy": 0.2},
+        {"name": "drop", "bars": 16, "energy": 1.0},
+        {"name": "outro", "bars": 8, "energy": 0.3}
     ],
     "description": "Brief creative description"
 }
 
-IMPORTANT: The fx_plan is where your creativity shines. Each section should have FX that serve the narrative.
-Think: WHY does this effect belong here? What emotion does it reinforce?
-Do NOT apply the same FX to every section. Be intentional. Less is more, but when you use an effect, commit to it.
+IMPORTANT RULES:
+- The fx_plan is where your creativity shines. Each section should have FX that serve the narrative.
+- The mix_plan is critical: decide pan, volume, and reverb send for EACH track based on the genre and mood.
+- section_details: specify the bars and energy (0.0-1.0) for EACH section. This controls the intensity arc.
+- Think: WHY does this effect/mix/energy belong here? What emotion does it reinforce?
+- Do NOT apply the same FX to every section. Be intentional.
 """
 
 SYSTEM_PROMPT_MIXER = """You are AURALIS, an expert mixing engineer.
@@ -181,10 +186,20 @@ Your response format:
 def generate_production_plan(
     description: str,
     config: BrainConfig | None = None,
+    reference_dna: dict[str, Any] | None = None,
 ) -> ProductionPlan:
-    """Generate a production plan from a natural language description."""
+    """Generate a production plan from a natural language description.
+
+    If reference_dna is provided, the LLM learns from analyzed reference tracks.
+    """
     cfg = config or BrainConfig()
     client = cfg.client
+
+    # Build the prompt with optional reference context
+    user_msg = f"Create a production plan for: {description}"
+    if reference_dna:
+        ref_summary = json.dumps(reference_dna, indent=2, default=str)
+        user_msg += f"\n\n## Reference Track DNA (learn from this):\n{ref_summary}"
 
     response = client.chat.completions.create(
         model=cfg.model,
@@ -193,7 +208,7 @@ def generate_production_plan(
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT_PRODUCER},
-            {"role": "user", "content": f"Create a production plan for: {description}"},
+            {"role": "user", "content": user_msg},
         ],
     )
 
@@ -216,6 +231,8 @@ def generate_production_plan(
         synth_presets=data.get("synth_presets", {}),
         effect_chains=data.get("effect_chains", {}),
         fx_plan=data.get("fx_plan", []),
+        mix_plan=data.get("mix_plan", {}),
+        section_details=data.get("section_details", []),
         description=data.get("description", ""),
         raw_response=raw,
     )
@@ -299,8 +316,11 @@ def plan_to_render_config(plan: ProductionPlan) -> dict[str, Any]:
         "synth_presets": plan.synth_presets,
         "effect_chains": plan.effect_chains,
         "fx_plan": plan.fx_plan,
+        "mix_plan": plan.mix_plan,
+        "section_details": plan.section_details,
         "render": {
             "sample_rate": 44100,
             "bpm": plan.bpm,
         },
     }
+

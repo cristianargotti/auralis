@@ -23,6 +23,7 @@ from auralis.brain.agent import (
 from auralis.grid.arrangement import (
     Arrangement,
     ArrangementConfig,
+    SectionTemplate,
     generate_arrangement,
     arrangement_summary,
 )
@@ -97,6 +98,34 @@ class TrackRender:
 
 # ── Pipeline ─────────────────────────────────────────────
 
+
+def _crossfade_concat(
+    chunks: list[NDArray[np.float64]],
+    crossfade_ms: int = 50,
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Concatenate audio chunks with cosine crossfade."""
+    if not chunks:
+        return np.array([], dtype=np.float64)
+    if len(chunks) == 1:
+        return chunks[0]
+
+    fade_len = int(sr * crossfade_ms / 1000)
+    result = chunks[0].copy()
+
+    for chunk in chunks[1:]:
+        if fade_len > 0 and len(result) >= fade_len and len(chunk) >= fade_len:
+            fade_out = np.cos(np.linspace(0, np.pi / 2, fade_len)) ** 2
+            fade_in = np.sin(np.linspace(0, np.pi / 2, fade_len)) ** 2
+            result[-fade_len:] *= fade_out
+            chunk = chunk.copy()
+            chunk[:fade_len] *= fade_in
+            result[-fade_len:] += chunk[:fade_len]
+            result = np.concatenate([result, chunk[fade_len:]])
+        else:
+            result = np.concatenate([result, chunk])
+
+    return result
 
 def _apply_narrative_fx(
     audio: NDArray[np.float64],
@@ -226,16 +255,36 @@ def render_track(
     plan = generate_production_plan(description, brain_config)
     _progress("brain", 1.0, f"Plan ready: {plan.title} ({plan.genre}, {plan.bpm}bpm, {plan.key} {plan.scale})")
 
-    # ── Step 2: Grid — Arrangement ──
+    # ── Step 2: Arrangement ──
     _progress("grid", 0.0, "Creating arrangement...")
     arr_config = ArrangementConfig(
         key=plan.key,
         scale=plan.scale,
         bpm=plan.bpm,
-        genre=plan.genre,  # type: ignore[arg-type]
-        structure=plan.structure,  # type: ignore[arg-type]
+        structure=plan.structure,
+        genre=plan.genre if plan.genre in ("house", "techno", "ambient", "pop", "hip_hop") else "house",
     )
     arrangement = generate_arrangement(arr_config)
+
+    # Override section energy/bars if the LLM specified section_details
+    if plan.section_details:
+        detail_map = {d.get("name", "").lower(): d for d in plan.section_details}
+        for section in arrangement.sections:
+            detail = detail_map.get(section.name.lower())
+            if detail:
+                if "energy" in detail:
+                    section.template = SectionTemplate(
+                        name=section.template.name,
+                        bars=detail.get("bars", section.template.bars),
+                        energy=float(detail["energy"]),
+                        has_drums=section.template.has_drums,
+                        has_bass=section.template.has_bass,
+                        has_chords=section.template.has_chords,
+                        has_melody=section.template.has_melody,
+                        drum_style=section.template.drum_style,
+                        bass_style=section.template.bass_style,
+                        melody_density=section.template.melody_density,
+                    )
     arr_info = arrangement_summary(arrangement)
     _progress("grid", 1.0, f"Arrangement: {arrangement.total_bars} bars, {len(arrangement.sections)} sections")
 
@@ -308,9 +357,8 @@ def render_track(
 
             full_track_audio.append(section_audio)
 
-        # 4. Stitch sections (Crossfade Concat would be better, but simple concat for MVP)
-        # TODO: Implement crossfade_concat for seamless transitions
-        combined_audio = np.concatenate(full_track_audio)
+        # Stitch sections with crossfade
+        combined_audio = _crossfade_concat(full_track_audio, crossfade_ms=50, sr=sample_rate)
         
         # Apply effect chain (Global for the track)
         chain_name = plan.effect_chains.get(track_name, "")
@@ -360,14 +408,16 @@ def render_track(
     )
     mixer.add_bus("reverb", effects=reverb_chain, volume_db=-3)
 
-    # Auto-pan and add tracks
-    pan_positions = {"drums": 0.0, "bass": 0.0, "chords": -0.3, "melody": 0.3}
-    volume_offsets = {"drums": -2.0, "bass": 0.0, "chords": -4.0, "melody": -1.0}
+    # Use AI mix_plan if available, otherwise defaults
+    default_pan = {"drums": 0.0, "bass": 0.0, "chords": -0.3, "melody": 0.3}
+    default_vol = {"drums": -2.0, "bass": 0.0, "chords": -4.0, "melody": -1.0}
 
     for name, audio in track_audio.items():
-        pan = pan_positions.get(name, 0.0)
-        vol = volume_offsets.get(name, -3.0)
-        sends = [SendConfig(bus_name="reverb", amount=0.2)] if name not in ("drums", "bass") else []
+        track_mix = plan.mix_plan.get(name, {})
+        pan = track_mix.get("pan", default_pan.get(name, 0.0))
+        vol = track_mix.get("volume_db", default_vol.get(name, -3.0))
+        rev_send = track_mix.get("reverb_send", 0.2 if name not in ("drums", "bass") else 0.0)
+        sends = [SendConfig(bus_name="reverb", amount=rev_send)] if rev_send > 0 else []
         mixer.add_track(name, audio, volume_db=vol, pan=pan, sends=sends)
 
     output_path = out / "mix_final.wav"
