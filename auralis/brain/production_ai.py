@@ -2,6 +2,9 @@
 
 Orchestrates: Brain (LLM) → Grid (arrangement) → Hands (synth+fx+mix) → Console (master+QC).
 This is the core of AURALIS — from text description to finished music.
+
+With reference tracks: extracts cloned palette (drums + timbres) and uses it
+for rendering, achieving 100% AI-driven production with cloned sonic identity.
 """
 
 from __future__ import annotations
@@ -232,14 +235,17 @@ def render_track(
     brain_config: BrainConfig | None = None,
     sample_rate: int = 44100,
     on_progress: Any = None,
+    reference_paths: list[str | Path] | None = None,
 ) -> TrackRender:
     """Full pipeline: description → finished track.
 
     Steps:
-    1. Brain: Generate production plan from description
-    2. Grid: Create arrangement from plan
-    3. Hands: Render each track (synth + effects)
-    4. Hands: Mix all tracks to stereo
+    1. Clone: Extract palette from reference tracks (if provided)
+    2. Brain: Generate production plan from description + DNA
+    3. Grid: Create arrangement from plan
+    4. Hands: Render each track (with cloned palette if available)
+    5. Textures: Generate neural textures via Stable Audio
+    6. Hands: Mix all tracks to stereo
     """
     if output_dir is None:
         output_dir = Path(tempfile.mkdtemp(prefix="auralis_"))
@@ -250,9 +256,78 @@ def render_track(
         if on_progress:
             on_progress(RenderProgress(stage=stage, progress=pct, message=msg))
 
+    # ── Step 0: Clone — Extract palette from references ──
+    palette = None
+    ref_dna = None
+
+    if reference_paths:
+        _progress("clone", 0.0, "Extracting sonic DNA from references...")
+        try:
+            from auralis.ear.sample_extractor import (
+                ClonedPalette,
+                build_cloned_palette,
+                merge_palettes,
+            )
+            from auralis.ear.separator import separate_track
+            from auralis.hands.timbre_cloner import build_timbre_models
+
+            palettes: list[ClonedPalette] = []
+            for ref_idx, ref_path in enumerate(reference_paths):
+                ref_path = Path(ref_path)
+                if not ref_path.exists():
+                    continue
+                _progress(
+                    "clone",
+                    ref_idx / len(reference_paths),
+                    f"Separating {ref_path.name}...",
+                )
+                # Separate reference into stems
+                stems_dir = out / f"ref_{ref_idx}_stems"
+                sep_result = separate_track(ref_path, stems_dir)
+
+                # Build cloned palette from separated stems
+                ref_palette = build_cloned_palette(
+                    stems_dir, source_name=ref_path.stem
+                )
+                palettes.append(ref_palette)
+
+            if palettes:
+                palette = (
+                    palettes[0]
+                    if len(palettes) == 1
+                    else merge_palettes(*palettes)
+                )
+
+                # Build timbre models from tonal samples
+                timbre_models = build_timbre_models(palette.tones)
+                # Attach to palette for renderer access
+                palette._timbre_models = timbre_models  # type: ignore[attr-defined]
+
+                _progress(
+                    "clone",
+                    1.0,
+                    f"Palette ready: {palette.total_samples()} samples, "
+                    f"{len(timbre_models)} timbres",
+                )
+        except Exception as e:
+            _progress("clone", 1.0, f"Clone extraction failed: {e}, continuing with synthesis")
+            palette = None
+
+        # Get reference DNA for LLM context
+        try:
+            from auralis.ear.reference_bank import ReferenceBank
+            ref_bank = ReferenceBank()
+            for ref_path in reference_paths:
+                ref_path = Path(ref_path)
+                if ref_path.exists():
+                    ref_bank.add(ref_path)
+            ref_dna = ref_bank.get_deep_profile()
+        except Exception:
+            ref_dna = None
+
     # ── Step 1: Brain — Production Plan ──
     _progress("brain", 0.0, "Generating production plan...")
-    plan = generate_production_plan(description, brain_config)
+    plan = generate_production_plan(description, brain_config, reference_dna=ref_dna)
     _progress("brain", 1.0, f"Plan ready: {plan.title} ({plan.genre}, {plan.bpm}bpm, {plan.key} {plan.scale})")
 
     # ── Step 2: Arrangement ──
@@ -342,9 +417,15 @@ def render_track(
                     )
                     voice = patch.voice
                 
-                # 3. Render section
+                # 3. Render section (with clone palette if available)
                 # Note: events are relative to 0.0 here, which is correct for section render
-                section_audio = render_midi_to_audio(events, sr=sample_rate, voice=voice)
+                section_audio = render_midi_to_audio(
+                    events,
+                    sr=sample_rate,
+                    voice=voice,
+                    palette=palette,
+                    stem_name=track_name,
+                )
                 
                 # Ensure exact length match
                 target_len = int(section_duration_s * sample_rate)
@@ -396,6 +477,31 @@ def render_track(
 
     _progress("hands", 1.0, f"Rendered {len(stems)} tracks with narrative evolution")
 
+    # ── Step 3b: Textures — Neural generation via Stable Audio ──
+    if plan.texture_prompts:
+        _progress("textures", 0.0, f"Generating {len(plan.texture_prompts)} neural textures...")
+        try:
+            from auralis.hands.texture_gen import generate_textures, load_texture_audio
+            textures = generate_textures(plan.texture_prompts, out, bpm=plan.bpm)
+            for t_idx, texture in enumerate(textures):
+                texture_audio = load_texture_audio(
+                    texture,
+                    target_duration_s=arrangement.duration_s,
+                    sr=sample_rate,
+                )
+                tex_name = f"texture_{texture.section}_{t_idx}"
+                track_audio[tex_name] = texture_audio
+                tex_path = out / f"stem_{tex_name}.wav"
+                save_audio(texture_audio, tex_path, sample_rate)
+                stems[tex_name] = str(tex_path)
+                _progress(
+                    "textures",
+                    (t_idx + 1) / len(textures),
+                    f"Texture {t_idx + 1}/{len(textures)}: {texture.section}",
+                )
+        except Exception as e:
+            _progress("textures", 1.0, f"Texture generation failed: {e}")
+
     # ── Step 4: Mix ──
     _progress("mix", 0.0, "Mixing tracks...")
     mixer = Mixer(MixConfig(sample_rate=sample_rate, bpm=plan.bpm))
@@ -423,6 +529,35 @@ def render_track(
     output_path = out / "mix_final.wav"
     mix_result = mixer.mix(output_path)
     _progress("mix", 1.0, f"Mix complete: {mix_result.peak_db:.1f}dB peak")
+
+    # ── Step 5: Adaptive Mastering (if reference DNA available) ──
+    if ref_dna:
+        _progress("master", 0.0, "Applying adaptive mastering from reference DNA...")
+        try:
+            from auralis.console.dna_brain import think as dna_think, Evidence
+            from auralis.console.mastering import MasterConfig, master_audio
+
+            # Build evidence from reference DNA
+            evidence = Evidence(
+                ref_lufs=ref_dna.get("spectral", {}).get("lufs", -8.0),
+                bass_type=ref_dna.get("bass", {}).get("type", ""),
+                percussion_density=ref_dna.get("drums", {}).get("density", 2.0),
+                sidechain_ratio=ref_dna.get("dynamics", {}).get("sidechain_ratio", 0.0),
+                instruments=ref_dna.get("instruments", []),
+            )
+            brain_result = dna_think(evidence)
+            master_plan = brain_result.master_plan
+
+            master_config = MasterConfig(
+                target_lufs=master_plan.target_lufs,
+                brain_plan=master_plan,
+            )
+            mastered_path = out / "master_final.wav"
+            master_audio(str(output_path), mastered_path, config=master_config)
+            output_path = mastered_path
+            _progress("master", 1.0, f"Adaptive mastering complete: {master_plan.target_lufs:.1f} LUFS target")
+        except Exception as e:
+            _progress("master", 1.0, f"Adaptive mastering skipped: {e}")
 
     return TrackRender(
         plan=plan,

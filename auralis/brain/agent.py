@@ -52,6 +52,7 @@ class ProductionPlan:
     fx_plan: list[dict[str, Any]] = field(default_factory=list)
     mix_plan: dict[str, dict[str, Any]] = field(default_factory=dict)  # AI-decided mix
     section_details: list[dict[str, Any]] = field(default_factory=list)  # AI-decided per-section
+    texture_prompts: list[dict[str, Any]] = field(default_factory=list)  # Neural texture generation
     description: str = ""
     raw_response: str = ""
 
@@ -146,6 +147,10 @@ When generating a production plan, respond with this exact JSON structure:
         {"name": "drop", "bars": 16, "energy": 1.0},
         {"name": "outro", "bars": 8, "energy": 0.3}
     ],
+    "texture_prompts": [
+        {"section": "breakdown", "prompt": "ethereal dark ambient pad, spacious reverb, minimal", "duration_s": 16, "volume": 0.4},
+        {"section": "intro", "prompt": "atmospheric noise texture with subtle movement", "duration_s": 8, "volume": 0.3}
+    ],
     "description": "Brief creative description"
 }
 
@@ -153,6 +158,7 @@ IMPORTANT RULES:
 - The fx_plan is where your creativity shines. Each section should have FX that serve the narrative.
 - The mix_plan is critical: decide pan, volume, and reverb send for EACH track based on the genre and mood.
 - section_details: specify the bars and energy (0.0-1.0) for EACH section. This controls the intensity arc.
+- texture_prompts: Generate prompts for atmospheric layers that DSP can't synthesize (pads, ambiences, textures). These will be rendered by a neural audio model. Only use for sections that NEED atmospheric depth.
 - Think: WHY does this effect/mix/energy belong here? What emotion does it reinforce?
 - Do NOT apply the same FX to every section. Be intentional.
 """
@@ -233,6 +239,7 @@ def generate_production_plan(
         fx_plan=data.get("fx_plan", []),
         mix_plan=data.get("mix_plan", {}),
         section_details=data.get("section_details", []),
+        texture_prompts=data.get("texture_prompts", []),
         description=data.get("description", ""),
         raw_response=raw,
     )
@@ -318,6 +325,7 @@ def plan_to_render_config(plan: ProductionPlan) -> dict[str, Any]:
         "fx_plan": plan.fx_plan,
         "mix_plan": plan.mix_plan,
         "section_details": plan.section_details,
+        "texture_prompts": plan.texture_prompts,
         "render": {
             "sample_rate": 44100,
             "bpm": plan.bpm,

@@ -2,6 +2,8 @@
 
 Pure numpy/scipy implementation — no external synth dependencies required.
 Supports: sine, saw, square, triangle, noise, wavetable, FM synthesis.
+Also supports clone rendering mode: uses extracted samples and cloned timbres
+from reference tracks when a ClonedPalette is available.
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import soundfile as sf
@@ -273,14 +275,32 @@ def render_midi_to_audio(
     notes: list[dict[str, float]],
     sr: int = 44100,
     voice: VoiceConfig | None = None,
+    palette: Any | None = None,
+    stem_name: str = "",
 ) -> NDArray[np.float64]:
     """Render MIDI note events to audio.
 
     Each note dict: {"note": 60, "start": 0.0, "duration": 0.5, "velocity": 0.8}
+
+    Clone rendering modes (when palette is provided):
+      - stem_name="drums": triggers extracted one-shot samples
+      - stem_name in palette.timbres: renders via spectral morphing
+      - otherwise: fallback to oscillator synthesis
     """
     if not notes:
         return np.zeros(sr, dtype=np.float64)
 
+    # ── Clone mode: drums (trigger one-shots) ──
+    if palette is not None and stem_name == "drums":
+        return _render_drums_from_palette(notes, palette, sr)
+
+    # ── Clone mode: tonal (spectral morphing) ──
+    if palette is not None and stem_name:
+        timbre_models = getattr(palette, "_timbre_models", None)
+        if timbre_models and stem_name in timbre_models:
+            return _render_tonal_from_timbre(notes, timbre_models[stem_name], sr)
+
+    # ── Standard mode: oscillator synthesis ──
     max_end = max(n["start"] + n["duration"] for n in notes)
     total_samples = int((max_end + 1.0) * sr)
     output = np.zeros(total_samples, dtype=np.float64)
@@ -292,6 +312,110 @@ def render_midi_to_audio(
         start_idx = int(note_event["start"] * sr)
 
         audio = render_voice(freq, dur, sr, voice) * vel
+
+        end_idx = min(start_idx + len(audio), total_samples)
+        actual_len = end_idx - start_idx
+        output[start_idx:end_idx] += audio[:actual_len]
+
+    # Normalize
+    peak = np.max(np.abs(output))
+    if peak > 0:
+        output = output / peak * 0.9
+
+    return output
+
+
+def _render_drums_from_palette(
+    notes: list[dict[str, float]],
+    palette: Any,
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Render drum pattern by triggering cloned one-shot samples.
+
+    Maps MIDI notes to drum labels using General MIDI convention,
+    then loads and triggers the best matching sample from the palette.
+    """
+    # General MIDI drum map → palette label lookup
+    _GM_DRUM_MAP: dict[int, str] = {
+        36: "Kick", 35: "Kick",
+        38: "Snare", 40: "Snare",
+        39: "Clap", 37: "Rimshot",
+        42: "Closed HH", 44: "Closed HH",
+        46: "Open HH",
+        51: "Ride", 59: "Ride",
+        49: "Crash", 57: "Crash",
+        45: "Tom", 47: "Tom", 48: "Tom",
+        43: "Tom", 41: "Tom",
+        63: "Conga", 62: "Conga",
+        56: "Cowbell",
+        70: "Shaker", 69: "Shaker",
+    }
+
+    max_end = max(n["start"] + n["duration"] for n in notes)
+    total_samples = int((max_end + 1.0) * sr)
+    output = np.zeros(total_samples, dtype=np.float64)
+
+    # Cache loaded samples
+    _sample_cache: dict[str, NDArray[np.float64]] = {}
+
+    for note_event in notes:
+        midi_note = int(note_event["note"])
+        vel = note_event.get("velocity", 0.8)
+        start_idx = int(note_event["start"] * sr)
+
+        label = _GM_DRUM_MAP.get(midi_note, "Percussion")
+        best = palette.best_drum(label)
+
+        if best is None:
+            continue
+
+        cache_key = str(best.path)
+        if cache_key not in _sample_cache:
+            try:
+                import soundfile as _sf
+                audio, _sr = _sf.read(str(best.path), dtype="float64")
+                if audio.ndim > 1:
+                    audio = np.mean(audio, axis=1)
+                # Resample if needed
+                if _sr != sr:
+                    import librosa as _lr
+                    audio = _lr.resample(audio, orig_sr=_sr, target_sr=sr)
+                _sample_cache[cache_key] = audio
+            except Exception:
+                continue
+
+        sample_audio = _sample_cache[cache_key] * vel
+        end_idx = min(start_idx + len(sample_audio), total_samples)
+        actual_len = end_idx - start_idx
+        output[start_idx:end_idx] += sample_audio[:actual_len]
+
+    # Normalize
+    peak = np.max(np.abs(output))
+    if peak > 0:
+        output = output / peak * 0.9
+
+    return output
+
+
+def _render_tonal_from_timbre(
+    notes: list[dict[str, float]],
+    timbre_model: Any,
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Render tonal notes using a cloned TimbreModel via spectral morphing."""
+    from auralis.hands.timbre_cloner import clone_render
+
+    max_end = max(n["start"] + n["duration"] for n in notes)
+    total_samples = int((max_end + 1.0) * sr)
+    output = np.zeros(total_samples, dtype=np.float64)
+
+    for note_event in notes:
+        midi_note = int(note_event["note"])
+        dur = note_event["duration"]
+        vel = note_event.get("velocity", 0.8)
+        start_idx = int(note_event["start"] * sr)
+
+        audio = clone_render(timbre_model, midi_note, dur, vel, sr)
 
         end_idx = min(start_idx + len(audio), total_samples)
         actual_len = end_idx - start_idx
