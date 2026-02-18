@@ -407,3 +407,308 @@ PRESET_CHAINS: dict[str, EffectChain] = {
         delay=DelayConfig(time_ms=250, feedback=0.3, wet=0.2),
     ),
 }
+
+
+# ── Automation Curves ────────────────────────────────────
+# The AI chooses the curve shape. Not hardcoded.
+
+
+def automation_curve(
+    n_samples: int,
+    start: float,
+    end: float,
+    shape: str = "linear",
+) -> NDArray[np.float64]:
+    """Generate an automation curve from start to end value.
+
+    The AI decides which shape to use based on narrative context.
+
+    Shapes:
+        linear:      Uniform change (basic)
+        exponential: Slow start, fast end (filter sweeps up)
+        logarithmic: Fast start, gentle tail (reverb decay)
+        ease_in:     Dramatic builds (tension before drop)
+        ease_out:    Smooth landings (post-drop settle)
+        s_curve:     Natural, organic transitions
+        step:        Instant change (drop hits)
+    """
+    t = np.linspace(0.0, 1.0, n_samples, dtype=np.float64)
+
+    if shape == "linear":
+        curve = t
+    elif shape == "exponential":
+        curve = t ** 2
+    elif shape == "logarithmic":
+        curve = np.sqrt(t)
+    elif shape == "ease_in":
+        curve = t ** 3
+    elif shape == "ease_out":
+        curve = 1.0 - (1.0 - t) ** 3
+    elif shape == "s_curve":
+        curve = 3 * t ** 2 - 2 * t ** 3
+    elif shape == "step":
+        curve = np.where(t >= 0.5, 1.0, 0.0)
+    else:
+        curve = t  # fallback to linear
+
+    return start + curve * (end - start)
+
+
+# ── Creative FX (AI-Driven) ──────────────────────────────
+
+
+def apply_shimmer_reverb(
+    audio: NDArray[np.float64],
+    decay_s: float = 3.0,
+    pitch_shift_semitones: int = 12,
+    wet: float = 0.4,
+    damping: float = 0.5,
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Shimmer Reverb — octave-shifted reverb tail for ethereal textures.
+
+    Used by AI for: breakdowns, intros, transitions.
+    The pitch-shifted feedback creates lush, cathedral-like space.
+    """
+    n = len(audio)
+
+    # Base reverb (long decay)
+    delay_ms_list = [31.0, 37.0, 41.0, 43.0, 53.0, 67.0]
+    feedback = 0.3 + decay_s * 0.15  # longer decay = more feedback
+    feedback = min(feedback, 0.85)
+
+    reverb_buf = np.zeros(n + int(decay_s * sr), dtype=np.float64)
+    reverb_buf[:n] = audio
+
+    for delay_ms in delay_ms_list:
+        d = int(delay_ms * sr / 1000.0)
+        if d < 1:
+            continue
+        for i in range(d, len(reverb_buf)):
+            reverb_buf[i] += reverb_buf[i - d] * feedback * (1 - damping * 0.3)
+
+    # Pitch shift via resampling (octave up = 2x speed, then stretch)
+    shift_ratio = 2.0 ** (pitch_shift_semitones / 12.0)
+    shifted_len = int(len(reverb_buf) / shift_ratio)
+    if shifted_len > 1:
+        indices = np.linspace(0, len(reverb_buf) - 1, shifted_len)
+        idx_floor = np.floor(indices).astype(int)
+        idx_ceil = np.minimum(idx_floor + 1, len(reverb_buf) - 1)
+        frac = indices - idx_floor
+        shifted = reverb_buf[idx_floor] * (1 - frac) + reverb_buf[idx_ceil] * frac
+        # Stretch back to original length
+        if len(shifted) < n:
+            shimmer = np.zeros(n, dtype=np.float64)
+            shimmer[:len(shifted)] = shifted
+        else:
+            shimmer = shifted[:n]
+    else:
+        shimmer = reverb_buf[:n]
+
+    # Damping filter on shimmer
+    from scipy.signal import sosfilt
+    cutoff = 3000 + (1 - damping) * 8000
+    w0 = 2 * np.pi * cutoff / sr
+    alpha = np.sin(w0) / (2 * 0.5)
+    b0 = (1 - np.cos(w0)) / 2
+    b1 = 1 - np.cos(w0)
+    b2 = (1 - np.cos(w0)) / 2
+    a0 = 1 + alpha
+    a1 = -2 * np.cos(w0)
+    a2 = 1 - alpha
+    sos = np.array([[b0 / a0, b1 / a0, b2 / a0, 1.0, a1 / a0, a2 / a0]])
+    shimmer = sosfilt(sos, shimmer).astype(np.float64)
+
+    # Mix: dry + reverb tail + shimmer
+    output = audio * (1 - wet) + reverb_buf[:n] * (wet * 0.6) + shimmer * (wet * 0.4)
+    return output
+
+
+def apply_filter_sweep(
+    audio: NDArray[np.float64],
+    filter_type: str = "highpass",
+    start_hz: float = 200.0,
+    end_hz: float = 20000.0,
+    curve_shape: str = "exponential",
+    resonance: float = 0.707,
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Filter Sweep — automated cutoff frequency with AI-chosen curve.
+
+    Used by AI for: build-ups (HP sweep up), drops (LP slam open).
+    The curve_shape determines HOW the filter moves (not just linear!).
+    """
+    n = len(audio)
+    block_size = 512  # Process in blocks for smooth automation
+
+    # Generate the frequency automation curve
+    n_blocks = max(1, n // block_size)
+    freq_curve = automation_curve(n_blocks, start_hz, end_hz, curve_shape)
+    # Clamp to valid range
+    freq_curve = np.clip(freq_curve, 20.0, sr * 0.45)
+
+    output = audio.copy()
+
+    for i in range(n_blocks):
+        start_idx = i * block_size
+        end_idx = min(start_idx + block_size, n)
+        if start_idx >= n:
+            break
+
+        cutoff = float(freq_curve[i])
+        w0 = 2 * np.pi * cutoff / sr
+        sin_w = float(np.sin(w0))
+        cos_w = float(np.cos(w0))
+        alpha = sin_w / (2 * resonance)
+
+        if filter_type == "highpass":
+            b0 = (1 + cos_w) / 2
+            b1 = -(1 + cos_w)
+            b2 = (1 + cos_w) / 2
+        else:  # lowpass
+            b0 = (1 - cos_w) / 2
+            b1 = 1 - cos_w
+            b2 = (1 - cos_w) / 2
+
+        a0 = 1 + alpha
+        a1_c = -2 * cos_w
+        a2_c = 1 - alpha
+
+        # Normalize
+        coeffs = (b0 / a0, b1 / a0, b2 / a0, a1_c / a0, a2_c / a0)
+
+        block = output[start_idx:end_idx]
+        b0n, b1n, b2n, a1n, a2n = coeffs
+        filtered = np.zeros_like(block)
+        x1, x2, y1, y2 = 0.0, 0.0, 0.0, 0.0
+        for j in range(len(block)):
+            filtered[j] = b0n * block[j] + b1n * x1 + b2n * x2 - a1n * y1 - a2n * y2
+            x2, x1 = x1, float(block[j])
+            y2, y1 = y1, float(filtered[j])
+        output[start_idx:end_idx] = filtered
+
+    return output
+
+
+def apply_stereo_width(
+    audio: NDArray[np.float64],
+    width: float = 1.5,
+) -> NDArray[np.float64]:
+    """Stereo Widener — Mid/Side processing for spatial control.
+
+    Used by AI for: drops (width=1.5-2.0, wide), breakdowns (width=0.5, narrow).
+    width=1.0 = unchanged, <1.0 = narrower, >1.0 = wider.
+    """
+    if audio.ndim == 1:
+        return audio  # Can't widen mono
+
+    left = audio[:, 0]
+    right = audio[:, 1]
+
+    # Encode to Mid/Side
+    mid = (left + right) * 0.5
+    side = (left - right) * 0.5
+
+    # Apply width (boost side for wider, reduce for narrower)
+    side_scaled = side * width
+
+    # Decode back to L/R
+    output = np.zeros_like(audio)
+    output[:, 0] = mid + side_scaled
+    output[:, 1] = mid - side_scaled
+
+    return output
+
+
+def apply_tape_stop(
+    audio: NDArray[np.float64],
+    duration_ms: float = 500.0,
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Tape Stop — pitch deceleration effect for transitions.
+
+    Used by AI for: section endings, DJ-style cuts, dramatic pauses.
+    Simulates the sound of a tape machine stopping.
+    """
+    n = len(audio)
+    stop_samples = int(duration_ms * sr / 1000.0)
+    stop_samples = min(stop_samples, n)
+
+    output = audio.copy()
+
+    # The tape stop happens at the end of the audio
+    stop_start = n - stop_samples
+
+    # Speed curve: 1.0 -> 0.0 (deceleration)
+    speed_curve = np.linspace(1.0, 0.05, stop_samples) ** 2  # Exponential slowdown
+
+    # Resample the tail according to the speed curve
+    positions = np.cumsum(speed_curve)
+    positions = positions / positions[-1] * (stop_samples - 1)
+    positions = np.clip(positions, 0, stop_samples - 2)
+
+    idx = positions.astype(int)
+    frac = positions - idx
+
+    tail = audio[stop_start:stop_start + stop_samples]
+    idx_next = np.minimum(idx + 1, len(tail) - 1)
+    stretched = tail[idx] * (1 - frac) + tail[idx_next] * frac
+
+    # Volume fade during stop
+    vol_fade = np.linspace(1.0, 0.0, stop_samples) ** 0.5
+    stretched *= vol_fade
+
+    output[stop_start:] = stretched[:n - stop_start]
+    return output
+
+
+def apply_pitch_riser(
+    audio: NDArray[np.float64],
+    semitones: float = 12.0,
+    curve_shape: str = "ease_in",
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Pitch Riser — gradual pitch increase for tension builds.
+
+    Used by AI for: build-up sections before drops.
+    The curve_shape controls how the pitch rises (ease_in for drama).
+    """
+    n = len(audio)
+
+    # Generate pitch curve: 0 semitones -> target semitones
+    pitch_curve = automation_curve(n, 0.0, semitones, curve_shape)
+
+    # Convert semitones to speed ratios
+    speed_ratios = 2.0 ** (pitch_curve / 12.0)
+
+    # Resample based on speed curve
+    positions = np.cumsum(speed_ratios)
+    positions = positions / positions[-1] * (n - 1)
+    positions = np.clip(positions, 0, n - 2)
+
+    idx = positions.astype(int)
+    frac = positions - idx
+    idx_next = np.minimum(idx + 1, n - 1)
+
+    output = audio[idx] * (1 - frac) + audio[idx_next] * frac
+    return output
+
+
+def apply_ring_mod(
+    audio: NDArray[np.float64],
+    freq_hz: float = 440.0,
+    wet: float = 0.3,
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Ring Modulation — metallic, dissonant harmonics.
+
+    Used by AI for: FX hits, risers, industrial/dark textures.
+    Multiplies the signal with a carrier wave.
+    """
+    n = len(audio)
+    t = np.arange(n, dtype=np.float64) / sr
+    carrier = np.sin(2 * np.pi * freq_hz * t)
+
+    modulated = audio * carrier
+
+    return audio * (1 - wet) + modulated * wet
