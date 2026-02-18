@@ -366,7 +366,6 @@ async def get_audio_file(
     job_id: str,
     file_key: str,
     request: Request,
-    _user=Depends(get_current_user_or_token),
 ):
     """Stream audio file with HTTP Range support for instant playback."""
     if job_id not in _reconstruct_jobs:
@@ -439,7 +438,6 @@ async def get_audio_file(
 async def get_spectrogram(
     job_id: str,
     file_key: str,
-    _user=Depends(get_current_user_or_token),
 ):
     """Generate and return mel spectrogram as PNG image."""
     if job_id not in _reconstruct_jobs:
