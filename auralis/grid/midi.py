@@ -116,31 +116,81 @@ def generate_chord_progression(
     progression: list[int] | None = None,
     bars: int = 4,
     velocity: int = 80,
+    energy: float = 0.5,
+    seed: int = 42,
 ) -> Pattern:
-    """Generate a chord progression pattern.
+    """Generate a chord progression with energy-aware complexity.
 
-    Default progression: i-iv-v-i (minor) or I-IV-V-I (major).
+    Low energy  → simple triads, whole notes, gentle dynamics
+    High energy → 7th/9th chords, rhythmic variation, wide dynamics
     """
+    rng = random.Random(seed)
+    is_minor = scale in ("minor", "dorian", "phrygian", "harmonic_minor")
+
+    # Energy-tiered progressions (the AI already suggests structure,
+    # but this gives musical defaults when the AI doesn't specify)
     if progression is None:
-        if scale in ("minor", "dorian", "phrygian", "harmonic_minor"):
-            progression = [0, 3, 4, 0]  # i-iv-v-i
+        if is_minor:
+            pool = [
+                [0, 3, 4, 0],      # i-iv-v-i (classic)
+                [0, 5, 3, 4],      # i-vi-iv-v (emotional)
+                [0, 2, 5, 4],      # i-iii-vi-v (cinematic)
+                [0, 5, 2, 4],      # i-vi-iii-v (melancholic)
+                [0, 3, 6, 4],      # i-iv-VII-v (dark)
+            ]
         else:
-            progression = [0, 3, 4, 0]  # I-IV-V-I
+            pool = [
+                [0, 3, 4, 0],      # I-IV-V-I (classic)
+                [0, 4, 5, 3],      # I-V-vi-IV (pop)
+                [0, 5, 3, 4],      # I-vi-IV-V (50s)
+                [0, 2, 5, 4],      # I-iii-vi-V (jazzy)
+                [0, 3, 1, 4],      # I-IV-ii-V (soul)
+            ]
+        progression = rng.choice(pool)
+
+    # Chord quality gets richer at higher energy
+    def _chord_type_for_degree(degree: int) -> str:
+        if energy > 0.8:
+            return rng.choice(["min7", "7", "9"]) if is_minor else rng.choice(["maj7", "7", "9"])
+        elif energy > 0.5:
+            return rng.choice(["minor", "min7"]) if is_minor else rng.choice(["major", "maj7"])
+        else:
+            return "minor" if is_minor else "major"
 
     scale_notes = get_scale_notes(root, scale, octave)
     notes: list[Note] = []
 
-    for bar, degree in enumerate(progression[:bars]):
+    for bar in range(bars):
+        degree = progression[bar % len(progression)]
         root_note = scale_notes[degree % len(scale_notes)]
-        # Determine chord quality from scale
-        chord = get_chord_notes(root_note, "minor" if scale in ("minor", "dorian") else "major")
-        for note_pitch in chord:
-            notes.append(Note(
-                pitch=note_pitch,
-                start_beat=bar * 4.0,
-                duration_beats=3.8,
-                velocity=velocity,
-            ))
+        chord_type = _chord_type_for_degree(degree)
+        chord = get_chord_notes(root_note, chord_type)
+
+        # Velocity follows energy arc
+        bar_energy = energy + rng.uniform(-0.1, 0.1)
+        bar_vel = int(velocity * (0.7 + 0.3 * bar_energy))
+
+        if energy > 0.7:
+            # High energy: rhythmic chord stabs
+            positions = [0.0, 1.0, 2.0, 3.0] if energy > 0.9 else [0.0, 2.0]
+            for pos in positions:
+                stab_vel = bar_vel + rng.randint(-8, 8)
+                for note_pitch in chord:
+                    notes.append(Note(
+                        pitch=note_pitch,
+                        start_beat=bar * 4.0 + pos,
+                        duration_beats=0.8 if energy > 0.9 else 1.8,
+                        velocity=max(40, min(127, stab_vel)),
+                    ))
+        else:
+            # Low/mid energy: sustained pads
+            for note_pitch in chord:
+                notes.append(Note(
+                    pitch=note_pitch,
+                    start_beat=bar * 4.0,
+                    duration_beats=3.8,
+                    velocity=max(40, min(127, bar_vel)),
+                ))
 
     return Pattern(
         name=f"Chord Progression ({root} {scale})",
@@ -223,35 +273,91 @@ def generate_melody(
     density: float = 0.6,
     velocity: int = 90,
     seed: int = 42,
+    energy: float = 0.5,
+    contour: str = "arc",
 ) -> Pattern:
-    """Generate a melodic pattern using scale-based random walk."""
+    """Generate a melodic pattern with narrative contour.
+
+    Contours:
+        arc:      Rises to 2/3, then descends (natural phrasing)
+        climax:   Builds to highest register at the end (pre-drop)
+        tension:  Gradually rises, never resolves (build-up)
+        release:  Starts high, resolves downward (post-drop calm)
+        flat:     No contour bias (ambient, textural)
+
+    Energy controls range, leap probability, and density.
+    """
     scale_notes = get_scale_notes(root, scale, octave)
-    # Extend to octave above
-    scale_notes += [n + 12 for n in scale_notes]
+    # Range expands with energy: low=1 octave, high=2+ octaves
+    n_octaves = 1 if energy < 0.3 else (2 if energy < 0.7 else 3)
+    extended = scale_notes.copy()
+    for o in range(1, n_octaves):
+        extended += [n + 12 * o for n in scale_notes]
+
     notes: list[Note] = []
     rng = random.Random(seed)
 
-    position = len(scale_notes) // 2  # Start in middle
+    position = len(extended) // 2  # Start in middle
     beat = 0.0
     total_beats = bars * 4.0
 
     while beat < total_beats:
+        progress = beat / total_beats  # 0.0 → 1.0
+
+        # Contour shapes the target register
+        if contour == "arc":
+            # Peak at 2/3, then descend
+            target = 1.0 - abs(progress - 0.66) * 2.0
+        elif contour == "climax":
+            # Exponential rise to the top
+            target = progress ** 1.5
+        elif contour == "tension":
+            # Linear rise, no resolution
+            target = progress * 0.9
+        elif contour == "release":
+            # Start high, resolve down
+            target = 1.0 - progress ** 0.7
+        else:  # flat
+            target = 0.5
+
+        # Target position in the extended scale
+        target_pos = int(target * (len(extended) - 1))
+
+        # Bias the random walk toward the target
         if rng.random() < density:
-            # Step: move up/down in scale
-            step = rng.choice([-2, -1, -1, 0, 1, 1, 2])
-            position = max(0, min(len(scale_notes) - 1, position + step))
-            dur = rng.choice([0.25, 0.5, 0.5, 1.0, 1.0, 2.0])
-            vel = velocity + rng.randint(-15, 10)
+            # Step toward target with some randomness
+            toward_target = 1 if target_pos > position else (-1 if target_pos < position else 0)
+            # Higher energy = bigger leaps
+            leap_chance = 0.1 + energy * 0.3  # 0.1-0.4
+            if rng.random() < leap_chance:
+                step = toward_target * rng.choice([2, 3, 4])
+            else:
+                step = rng.choice([-1, 0, toward_target, toward_target, 1])
+
+            position = max(0, min(len(extended) - 1, position + step))
+
+            # Duration: shorter at high energy (busier melodies)
+            if energy > 0.7:
+                dur = rng.choice([0.25, 0.25, 0.5, 0.5, 1.0])
+            elif energy > 0.4:
+                dur = rng.choice([0.25, 0.5, 0.5, 1.0, 1.0, 2.0])
+            else:
+                dur = rng.choice([0.5, 1.0, 1.0, 2.0, 2.0, 4.0])
+
+            # Velocity follows contour (louder at peak)
+            contour_vel = int(velocity * (0.7 + 0.3 * target))
+            vel = contour_vel + rng.randint(-12, 8)
 
             notes.append(Note(
-                pitch=scale_notes[position],
+                pitch=extended[position],
                 start_beat=beat,
                 duration_beats=min(dur, total_beats - beat),
                 velocity=max(40, min(127, vel)),
             ))
             beat += dur
         else:
-            beat += rng.choice([0.25, 0.5])
+            # Rest — duration also energy-dependent
+            beat += rng.choice([0.25, 0.5]) if energy > 0.5 else rng.choice([0.5, 1.0])
 
     return Pattern(
         name=f"Melody ({root} {scale})",

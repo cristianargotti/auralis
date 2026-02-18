@@ -192,9 +192,23 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
                 octave=3,
                 bars=min(template.bars, 4),
                 velocity=int(60 + template.energy * 40),
+                energy=template.energy,
+                seed=seed + 200,
             )
 
         if template.has_melody:
+            # Map section type to melodic contour
+            _contour_map = {
+                "intro": "release",     # Gentle descent, settling in
+                "verse": "arc",         # Natural rise and fall
+                "chorus": "climax",     # Build to peak
+                "drop": "climax",       # Maximum intensity at end
+                "breakdown": "release", # Calm, descending
+                "bridge": "tension",    # Rising, unresolved
+                "outro": "release",     # Resolving downward
+            }
+            contour = _contour_map.get(template.name, "arc")
+
             section.patterns["melody"] = generate_melody(
                 root=config.key,
                 scale=config.scale,
@@ -203,6 +217,8 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
                 density=template.melody_density,
                 velocity=int(70 + template.energy * 50),
                 seed=seed,
+                energy=template.energy,
+                contour=contour,
             )
 
         # ── Humanize all patterns ──
