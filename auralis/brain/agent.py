@@ -49,7 +49,8 @@ class ProductionPlan:
     structure: list[str]
     synth_presets: dict[str, str]  # track_name -> preset_name
     effect_chains: dict[str, str]  # track_name -> chain_name
-    description: str
+    fx_plan: list[dict[str, Any]] = field(default_factory=list)  # AI-generated FX automation
+    description: str = ""
     raw_response: str = ""
 
 
@@ -66,6 +67,34 @@ Available drum styles: four_on_floor, breakbeat, trap, minimal
 Available bass styles: simple, walking, syncopated
 Available genres: house, techno, ambient, pop, hip_hop
 Available scales: major, minor, dorian, mixolydian, phrygian, lydian, harmonic_minor, pentatonic_major, pentatonic_minor, blues
+
+## FX Palette (You decide WHAT, WHEN, WHY)
+You have access to these effects. For each section, decide which to apply and why.
+
+Creative FX:
+- shimmer_reverb: params={decay_s: 1-6, pitch_shift_semitones: 7/12/19, wet: 0-1, damping: 0-1}
+- filter_sweep: params={filter_type: highpass|lowpass, start_hz: 20-20000, end_hz: 20-20000, resonance: 0.5-4.0}
+- stereo_width: params={width: 0.0-2.0} (1.0=normal, <1=narrow, >1=wide)
+- tape_stop: params={duration_ms: 200-2000}
+- pitch_riser: params={semitones: 1-24}
+- ring_mod: params={freq_hz: 50-2000, wet: 0-0.5}
+
+Classic FX:
+- reverb: params={room_size: 0-1, damping: 0-1, wet: 0-1}
+- delay: params={time_ms: 50-1000, feedback: 0-0.8, wet: 0-0.6}
+- chorus: params={rate_hz: 0.1-5, depth_ms: 1-20, mix: 0-1}
+- distortion: params={drive: 0.5-10, type: soft_clip|hard_clip|tube|foldback, mix: 0-1}
+- compressor: params={threshold_db: -40 to 0, ratio: 1-20, attack_ms: 0.1-100, release_ms: 10-1000}
+- bitcrush: params={bits: 4-16, downsample: 1-8, mix: 0-1}
+- saturation: params={drive: 0.01-0.5, mix: 0-1}
+
+## Automation Curves (You decide the SHAPE)
+curve_shape options: linear, exponential, logarithmic, ease_in, ease_out, s_curve, step
+- exponential: slow start, fast end (great for filter sweeps building up)
+- ease_in: dramatic builds (tension before drop)
+- ease_out: smooth landings (post-drop settle)
+- s_curve: natural organic transitions
+- step: instant on/off (drop impact)
 
 When generating a production plan, respond with this exact JSON structure:
 {
@@ -87,8 +116,40 @@ When generating a production plan, respond with this exact JSON structure:
         "melody": "edm_lead",
         "chords": "ambient_pad"
     },
+    "fx_plan": [
+        {
+            "section": "breakdown",
+            "effect": "shimmer_reverb",
+            "target": "chords",
+            "why": "Create ethereal space after intense drop",
+            "params": {"decay_s": 4.0, "pitch_shift_semitones": 12, "wet": 0.5, "damping": 0.4},
+            "automation": {
+                "param": "wet",
+                "curve": "ease_in",
+                "start": 0.1,
+                "end": 0.6
+            }
+        },
+        {
+            "section": "buildup",
+            "effect": "filter_sweep",
+            "target": "bass",
+            "why": "Build tension before the drop",
+            "params": {"filter_type": "highpass", "start_hz": 100, "end_hz": 8000, "resonance": 1.5},
+            "automation": {
+                "param": "cutoff_hz",
+                "curve": "exponential",
+                "start": 100,
+                "end": 8000
+            }
+        }
+    ],
     "description": "Brief creative description"
 }
+
+IMPORTANT: The fx_plan is where your creativity shines. Each section should have FX that serve the narrative.
+Think: WHY does this effect belong here? What emotion does it reinforce?
+Do NOT apply the same FX to every section. Be intentional. Less is more, but when you use an effect, commit to it.
 """
 
 SYSTEM_PROMPT_MIXER = """You are AURALIS, an expert mixing engineer.
@@ -154,6 +215,7 @@ def generate_production_plan(
         structure=data.get("structure", ["intro", "verse", "chorus", "outro"]),
         synth_presets=data.get("synth_presets", {}),
         effect_chains=data.get("effect_chains", {}),
+        fx_plan=data.get("fx_plan", []),
         description=data.get("description", ""),
         raw_response=raw,
     )
@@ -236,6 +298,7 @@ def plan_to_render_config(plan: ProductionPlan) -> dict[str, Any]:
         },
         "synth_presets": plan.synth_presets,
         "effect_chains": plan.effect_chains,
+        "fx_plan": plan.fx_plan,
         "render": {
             "sample_rate": 44100,
             "bpm": plan.bpm,

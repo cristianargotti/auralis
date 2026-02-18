@@ -40,6 +40,14 @@ from auralis.hands.effects import (
     PRESET_CHAINS,
     EffectChain,
     process_chain,
+    # Creative FX (AI-Driven)
+    apply_shimmer_reverb,
+    apply_filter_sweep,
+    apply_stereo_width,
+    apply_tape_stop,
+    apply_pitch_riser,
+    apply_ring_mod,
+    automation_curve,
 )
 from auralis.hands.mixer import (
     Mixer,
@@ -88,6 +96,105 @@ class TrackRender:
 
 
 # ── Pipeline ─────────────────────────────────────────────
+
+
+def _apply_narrative_fx(
+    audio: NDArray[np.float64],
+    track_name: str,
+    arrangement: Arrangement,
+    plan: ProductionPlan,
+    sr: int = 44100,
+) -> NDArray[np.float64]:
+    """Apply AI-generated narrative FX to a track.
+
+    The LLM's fx_plan tells us exactly what effect to apply,
+    on which section, with which parameters, and why.
+    """
+    if not plan.fx_plan:
+        return audio
+
+    result = audio.copy()
+    total_len = len(result)
+
+    for fx_entry in plan.fx_plan:
+        target = fx_entry.get("target", "")
+        if target != track_name:
+            continue
+
+        section_name = fx_entry.get("section", "").lower()
+        effect_name = fx_entry.get("effect", "")
+        params = fx_entry.get("params", {})
+
+        # Find the section(s) that match this name
+        for section in arrangement.sections:
+            if section.name.lower() != section_name:
+                continue
+
+            # Calculate sample range for this section
+            bar_samples = int(60.0 / plan.bpm * 4 * sr)
+            start_sample = section.start_bar * bar_samples
+            end_sample = min(start_sample + section.bars * bar_samples, total_len)
+            if start_sample >= total_len:
+                continue
+
+            segment = result[start_sample:end_sample].copy()
+
+            try:
+                if effect_name == "shimmer_reverb":
+                    segment = apply_shimmer_reverb(
+                        segment,
+                        decay_s=params.get("decay_s", 3.0),
+                        pitch_shift_semitones=int(params.get("pitch_shift_semitones", 12)),
+                        wet=params.get("wet", 0.4),
+                        damping=params.get("damping", 0.5),
+                        sr=sr,
+                    )
+                elif effect_name == "filter_sweep":
+                    curve = fx_entry.get("automation", {}).get("curve", "exponential")
+                    segment = apply_filter_sweep(
+                        segment,
+                        filter_type=params.get("filter_type", "highpass"),
+                        start_hz=params.get("start_hz", 200),
+                        end_hz=params.get("end_hz", 20000),
+                        curve_shape=curve,
+                        resonance=params.get("resonance", 0.707),
+                        sr=sr,
+                    )
+                elif effect_name == "stereo_width":
+                    segment = apply_stereo_width(
+                        segment,
+                        width=params.get("width", 1.5),
+                    )
+                elif effect_name == "tape_stop":
+                    segment = apply_tape_stop(
+                        segment,
+                        duration_ms=params.get("duration_ms", 500),
+                        sr=sr,
+                    )
+                elif effect_name == "pitch_riser":
+                    curve = fx_entry.get("automation", {}).get("curve", "ease_in")
+                    segment = apply_pitch_riser(
+                        segment,
+                        semitones=params.get("semitones", 12),
+                        curve_shape=curve,
+                        sr=sr,
+                    )
+                elif effect_name == "ring_mod":
+                    segment = apply_ring_mod(
+                        segment,
+                        freq_hz=params.get("freq_hz", 440),
+                        wet=params.get("wet", 0.3),
+                        sr=sr,
+                    )
+            except Exception:
+                # If an FX fails, skip it — don't crash the render
+                continue
+
+            # Write back (handle length changes from reverb tails etc.)
+            actual_len = min(len(segment), end_sample - start_sample)
+            result[start_sample:start_sample + actual_len] = segment[:actual_len]
+
+    return result
 
 
 def render_track(
@@ -206,10 +313,14 @@ def render_track(
         combined_audio = np.concatenate(full_track_audio)
         
         # Apply effect chain (Global for the track)
-        # In V2 we could have per-section FX too!
         chain_name = plan.effect_chains.get(track_name, "")
         if chain_name in PRESET_CHAINS:
             combined_audio = process_chain(combined_audio, PRESET_CHAINS[chain_name], sample_rate, plan.bpm)
+
+        # Apply AI-generated FX plan (per-section creative FX)
+        combined_audio = _apply_narrative_fx(
+            combined_audio, track_name, arrangement, plan, sample_rate,
+        )
 
         track_audio[track_name] = combined_audio
 
