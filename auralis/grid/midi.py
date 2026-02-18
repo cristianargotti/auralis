@@ -459,3 +459,169 @@ def pattern_to_note_events(pattern: Pattern, bpm: float = 120.0) -> list[dict[st
         }
         for n in pattern.notes
     ]
+
+
+# ── Humanization ─────────────────────────────────────────
+# These break the mechanical grid and make patterns feel alive.
+
+
+def humanize_velocity(
+    pattern: Pattern,
+    amount: int = 15,
+    seed: int = 42,
+) -> Pattern:
+    """Add random velocity variation to every note.
+
+    A real musician never hits at exactly the same velocity twice.
+    amount=10 is subtle, 20 is noticeable, 30+ is sloppy.
+    """
+    rng = random.Random(seed)
+    new_notes = []
+    for note in pattern.notes:
+        delta = rng.randint(-amount, amount)
+        new_vel = max(20, min(127, note.velocity + delta))
+        new_notes.append(Note(
+            pitch=note.pitch,
+            start_beat=note.start_beat,
+            duration_beats=note.duration_beats,
+            velocity=new_vel,
+        ))
+    return Pattern(name=pattern.name, notes=new_notes, length_beats=pattern.length_beats)
+
+
+def humanize_timing(
+    pattern: Pattern,
+    swing: float = 0.02,
+    seed: int = 42,
+) -> Pattern:
+    """Apply micro-timing offsets (swing) to off-beat notes.
+
+    Breaks the metronomic grid. A real drummer is slightly ahead or behind.
+    swing=0.01 is tight, 0.03 is groovy, 0.05+ is loose/drunken.
+    """
+    rng = random.Random(seed)
+    new_notes = []
+    for note in pattern.notes:
+        # Only humanize off-beat notes (not downbeats)
+        is_downbeat = abs(note.start_beat - round(note.start_beat)) < 0.01
+        if is_downbeat:
+            offset = rng.uniform(-swing * 0.3, swing * 0.3)  # Subtle on downbeats
+        else:
+            offset = rng.uniform(-swing, swing)  # More on offbeats
+        new_start = max(0.0, note.start_beat + offset)
+        new_notes.append(Note(
+            pitch=note.pitch,
+            start_beat=new_start,
+            duration_beats=note.duration_beats,
+            velocity=note.velocity,
+        ))
+    return Pattern(name=pattern.name, notes=new_notes, length_beats=pattern.length_beats)
+
+
+def add_ghost_notes(
+    pattern: Pattern,
+    bars: int = 4,
+    probability: float = 0.3,
+    velocity: int = 35,
+    seed: int = 42,
+) -> Pattern:
+    """Insert subtle low-velocity snare ghost notes between main beats.
+
+    Ghost notes are the secret sauce of groove. They fill the space
+    between kick and snare with barely-audible texture.
+    probability=0.3 means 30% chance per 16th note slot.
+    """
+    SNARE = 38
+    rng = random.Random(seed)
+    new_notes = list(pattern.notes)
+
+    # Find existing hit positions to avoid doubling
+    existing_positions = {round(n.start_beat * 4) / 4 for n in pattern.notes if n.pitch == SNARE}
+
+    for bar in range(bars):
+        for sixteenth in range(16):
+            beat_pos = bar * 4.0 + sixteenth * 0.25
+            # Skip if there's already a hit here
+            if round(beat_pos * 4) / 4 in existing_positions:
+                continue
+            # Skip downbeats (those should be intentional, not ghosts)
+            if sixteenth % 4 == 0:
+                continue
+            if rng.random() < probability:
+                vel = velocity + rng.randint(-10, 10)
+                new_notes.append(Note(
+                    pitch=SNARE,
+                    start_beat=beat_pos,
+                    duration_beats=0.05,
+                    velocity=max(15, min(60, vel)),
+                ))
+
+    return Pattern(name=pattern.name, notes=new_notes, length_beats=pattern.length_beats)
+
+
+def add_drum_fill(
+    pattern: Pattern,
+    every_n_bars: int = 4,
+    total_bars: int = 4,
+    fill_type: str = "snare_roll",
+    energy: float = 0.5,
+    seed: int = 42,
+) -> Pattern:
+    """Add a drum fill at the end of every N bars.
+
+    Fills mark phrase boundaries — a human drummer ALWAYS marks them.
+    fill_type: 'snare_roll' (classic) or 'buildup' (ascending).
+    energy controls fill intensity: 0.3=subtle, 0.8=aggressive.
+    """
+    SNARE = 38
+    TOM_HIGH = 50
+    TOM_MID = 47
+    TOM_LOW = 45
+    CRASH = 49
+
+    rng = random.Random(seed)
+    new_notes = list(pattern.notes)
+
+    for bar in range(total_bars):
+        # Only fill at phrase boundaries
+        if (bar + 1) % every_n_bars != 0:
+            continue
+
+        fill_start = bar * 4.0 + 3.0  # Last beat of the bar
+        n_hits = 4 if energy < 0.5 else 8  # 16ths or 32nds
+
+        if fill_type == "snare_roll":
+            for i in range(n_hits):
+                beat_pos = fill_start + i * (1.0 / n_hits)
+                vel = int(70 + energy * 57 - rng.randint(0, 15))
+                # Crescendo: velocity rises toward the end
+                vel = int(vel * (0.6 + 0.4 * i / n_hits))
+                new_notes.append(Note(
+                    pitch=SNARE,
+                    start_beat=beat_pos,
+                    duration_beats=0.05,
+                    velocity=max(40, min(127, vel)),
+                ))
+        elif fill_type == "buildup":
+            # Tom cascade: high -> mid -> low -> crash
+            toms = [TOM_HIGH, TOM_HIGH, TOM_MID, TOM_MID, TOM_LOW, TOM_LOW, SNARE, SNARE]
+            for i in range(min(n_hits, len(toms))):
+                beat_pos = fill_start + i * (1.0 / n_hits)
+                vel = int(80 + energy * 47)
+                new_notes.append(Note(
+                    pitch=toms[i],
+                    start_beat=beat_pos,
+                    duration_beats=0.05,
+                    velocity=max(50, min(127, vel)),
+                ))
+
+        # Crash on the 1 of the next bar (if not at end)
+        if bar + 1 < total_bars and energy > 0.4:
+            new_notes.append(Note(
+                pitch=CRASH,
+                start_beat=(bar + 1) * 4.0,
+                duration_beats=0.5,
+                velocity=int(90 + energy * 37),
+            ))
+
+    return Pattern(name=pattern.name, notes=new_notes, length_beats=pattern.length_beats)

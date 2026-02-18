@@ -16,6 +16,11 @@ from auralis.grid.midi import (
     generate_chord_progression,
     generate_drum_pattern,
     generate_melody,
+    # Humanization
+    humanize_velocity,
+    humanize_timing,
+    add_ghost_notes,
+    add_drum_fill,
 )
 
 SectionType = Literal["intro", "verse", "chorus", "bridge", "breakdown", "drop", "outro"]
@@ -198,6 +203,41 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
                 density=template.melody_density,
                 velocity=int(70 + template.energy * 50),
                 seed=seed,
+            )
+
+        # ── Humanize all patterns ──
+        for track_name, pattern in section.patterns.items():
+            # Velocity humanization for all tracks
+            section.patterns[track_name] = humanize_velocity(
+                pattern, amount=12, seed=seed + hash(track_name) % 1000,
+            )
+            # Timing humanization (more swing at higher energy)
+            swing = 0.01 + template.energy * 0.03  # 0.01-0.04
+            section.patterns[track_name] = humanize_timing(
+                section.patterns[track_name],
+                swing=swing,
+                seed=seed + hash(track_name) % 1000 + 1,
+            )
+
+        # Drum-specific humanization
+        if "drums" in section.patterns and template.energy > 0.4:
+            # Ghost notes (more ghosts at higher energy)
+            ghost_prob = 0.1 + template.energy * 0.25  # 0.1-0.35
+            section.patterns["drums"] = add_ghost_notes(
+                section.patterns["drums"],
+                bars=template.bars,
+                probability=ghost_prob,
+                velocity=int(25 + template.energy * 20),
+                seed=seed + 50,
+            )
+            # Fills at phrase boundaries (every 4 bars)
+            section.patterns["drums"] = add_drum_fill(
+                section.patterns["drums"],
+                every_n_bars=4,
+                total_bars=template.bars,
+                fill_type="snare_roll" if template.energy < 0.7 else "buildup",
+                energy=template.energy,
+                seed=seed + 99,
             )
 
         arrangement.sections.append(section)
