@@ -130,6 +130,7 @@ async def analyze_track(project_id: str) -> JobStatus:
         "total_steps": 4,
         "message": "Starting analysis...",
         "result": None,
+        "project_id": project_id,
     }
 
     _task = asyncio.create_task(  # noqa: RUF006

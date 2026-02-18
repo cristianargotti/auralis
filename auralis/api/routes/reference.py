@@ -48,12 +48,35 @@ async def add_reference(req: AddReferenceRequest) -> AddReferenceResponse:
     """
     from pathlib import Path
 
-    # Load the job data from the reconstruct pipeline
+    # Load the job data — check reconstruct pipeline first, then EAR pipeline
     from auralis.api.routes.reconstruct import _reconstruct_jobs
 
     job = _reconstruct_jobs.get(req.job_id)
+    source = "reconstruct"
+
     if not job:
-        raise HTTPException(status_code=404, detail=f"Job {req.job_id} not found")
+        # Fallback: check EAR analysis jobs
+        from auralis.api.routes.ear import _jobs as _ear_jobs
+
+        ear_job = _ear_jobs.get(req.job_id)
+        if not ear_job:
+            raise HTTPException(status_code=404, detail=f"Job {req.job_id} not found")
+        if ear_job.get("status") != "complete":
+            raise HTTPException(
+                status_code=400,
+                detail="Job not complete yet. Wait for analysis to finish.",
+            )
+        # Map EAR result format to what add_reference expects
+        ear_result = ear_job.get("result", {})
+        job = {
+            "result": {
+                "analysis": ear_result.get("track_dna", {}),
+                "stem_analysis": ear_result.get("stems", {}),
+            },
+            "project_id": ear_job.get("project_id", ""),
+            "original_name": req.name or f"Track {req.job_id[:8]}",
+        }
+        source = "ear"
 
     result = job.get("result", {})
     if not result:
