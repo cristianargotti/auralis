@@ -144,8 +144,49 @@ GENRE_STRUCTURES: dict[str, list[SectionTemplate]] = {
 # ── Arrangement Generator ────────────────────────────────
 
 
+def _evolve_template(
+    template: SectionTemplate,
+    occurrence: int,
+) -> SectionTemplate:
+    """Apply progressive evolution to repeated sections.
+
+    Each occurrence of the same section type gets subtle additions:
+      - 2nd time: slightly higher energy, more ghost notes
+      - 3rd time: different drum fills, more melodic density
+      - 4th+: energy caps, maximum layering
+    """
+    if occurrence <= 0:
+        return template
+
+    # Create a copy with evolved parameters
+    evolved = SectionTemplate(
+        name=template.name,
+        bars=template.bars,
+        energy=min(1.0, template.energy + occurrence * 0.05),
+        has_drums=template.has_drums,
+        has_bass=template.has_bass,
+        has_chords=template.has_chords,
+        has_melody=template.has_melody,
+        drum_style=template.drum_style,
+        bass_style=template.bass_style,
+        melody_density=min(0.9, template.melody_density + occurrence * 0.08),
+    )
+
+    # 3rd+ occurrence: upgrade drum style for variety
+    if occurrence >= 2 and template.drum_style == "four_on_floor":
+        evolved.bass_style = "syncopated"
+
+    return evolved
+
+
 def generate_arrangement(config: ArrangementConfig) -> Arrangement:
-    """Generate a complete song arrangement."""
+    """Generate a complete song arrangement with section variation.
+
+    Key improvement: sections of the same type (e.g. verse 1 vs verse 2)
+    share the same base seed so they use the same motif, but pass an
+    occurrence counter for progressive variation (more layers, higher
+    energy, different motif arrangements each time).
+    """
     # Get structure from genre or custom
     if config.structure:
         templates = []
@@ -161,74 +202,90 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
     arrangement = Arrangement(config=config)
     current_bar = 0
 
+    # ── Occurrence tracking ──
+    # Same section type shares base seed → same motif, different variations
+    occurrence_count: dict[str, int] = {}
+    base_seeds: dict[str, int] = {}
+
     for i, template in enumerate(templates):
-        section = SectionInstance(template=template, start_bar=current_bar)
-        seed = i * 100 + 42
+        section_type = template.name
+        occurrence = occurrence_count.get(section_type, 0)
+        occurrence_count[section_type] = occurrence + 1
+
+        # First occurrence establishes the seed; later ones reuse it
+        if occurrence == 0:
+            base_seeds[section_type] = i * 100 + 42
+        seed = base_seeds[section_type]
+
+        # Evolve template for repeated sections
+        active_template = _evolve_template(template, occurrence)
+
+        section = SectionInstance(template=active_template, start_bar=current_bar)
 
         # Generate track patterns
-        if template.has_drums:
+        if active_template.has_drums:
             section.patterns["drums"] = generate_drum_pattern(
-                style=template.drum_style,  # type: ignore[arg-type]
-                bars=template.bars,
-                velocity=int(70 + template.energy * 57),
-                energy=template.energy,  # Pass narrative energy
+                style=active_template.drum_style,  # type: ignore[arg-type]
+                bars=active_template.bars,
+                velocity=int(70 + active_template.energy * 57),
+                energy=active_template.energy,
             )
 
-        if template.has_bass:
+        if active_template.has_bass:
             section.patterns["bass"] = generate_bassline(
                 root=config.key,
                 scale=config.scale,
                 octave=2,
-                pattern_type=template.bass_style,  # type: ignore[arg-type]
-                bars=template.bars,
-                velocity=int(80 + template.energy * 47),
-                energy=template.energy,  # Pass narrative energy
+                pattern_type=active_template.bass_style,  # type: ignore[arg-type]
+                bars=active_template.bars,
+                velocity=int(80 + active_template.energy * 47),
+                energy=active_template.energy,
             )
 
-        if template.has_chords:
+        if active_template.has_chords:
             section.patterns["chords"] = generate_chord_progression(
                 root=config.key,
                 scale=config.scale,
                 octave=3,
-                bars=min(template.bars, 4),
-                velocity=int(60 + template.energy * 40),
-                energy=template.energy,
+                bars=min(active_template.bars, 4),
+                velocity=int(60 + active_template.energy * 40),
+                energy=active_template.energy,
                 seed=seed + 200,
             )
 
-        if template.has_melody:
+        if active_template.has_melody:
             # Map section type to melodic contour
             _contour_map = {
-                "intro": "release",     # Gentle descent, settling in
-                "verse": "arc",         # Natural rise and fall
-                "chorus": "climax",     # Build to peak
-                "drop": "climax",       # Maximum intensity at end
-                "breakdown": "release", # Calm, descending
-                "bridge": "tension",    # Rising, unresolved
-                "outro": "release",     # Resolving downward
+                "intro": "release",
+                "verse": "arc",
+                "chorus": "climax",
+                "drop": "climax",
+                "breakdown": "release",
+                "bridge": "tension",
+                "outro": "release",
             }
-            contour = _contour_map.get(template.name, "arc")
+            contour = _contour_map.get(active_template.name, "arc")
 
             section.patterns["melody"] = generate_melody(
                 root=config.key,
                 scale=config.scale,
                 octave=4,
-                bars=template.bars,
-                density=template.melody_density,
-                velocity=int(70 + template.energy * 50),
-                seed=seed,
-                energy=template.energy,
+                bars=active_template.bars,
+                density=active_template.melody_density,
+                velocity=int(70 + active_template.energy * 50),
+                seed=seed,  # Shared seed → same motif
+                energy=active_template.energy,
                 contour=contour,
+                section_type=active_template.name,
+                occurrence=occurrence,  # Progressive variation
             )
 
         # ── Humanize all patterns ──
         for track_name, pattern in section.patterns.items():
-            # Velocity humanization for all tracks
             section.patterns[track_name] = humanize_velocity(
                 pattern, amount=12, seed=seed + hash(track_name) % 1000,
             )
-            # Timing humanization (more swing at higher energy)
-            swing = 0.01 + template.energy * 0.03  # 0.01-0.04
+            swing = 0.01 + active_template.energy * 0.03
             section.patterns[track_name] = humanize_timing(
                 section.patterns[track_name],
                 swing=swing,
@@ -236,28 +293,32 @@ def generate_arrangement(config: ArrangementConfig) -> Arrangement:
             )
 
         # Drum-specific humanization
-        if "drums" in section.patterns and template.energy > 0.4:
-            # Ghost notes (more ghosts at higher energy)
-            ghost_prob = 0.1 + template.energy * 0.25  # 0.1-0.35
+        if "drums" in section.patterns and active_template.energy > 0.4:
+            ghost_prob = 0.1 + active_template.energy * 0.25
+            # More ghosts on repeated sections
+            ghost_prob = min(0.5, ghost_prob + occurrence * 0.05)
             section.patterns["drums"] = add_ghost_notes(
                 section.patterns["drums"],
-                bars=template.bars,
+                bars=active_template.bars,
                 probability=ghost_prob,
-                velocity=int(25 + template.energy * 20),
+                velocity=int(25 + active_template.energy * 20),
                 seed=seed + 50,
             )
-            # Fills at phrase boundaries (every 4 bars)
+            # Alternate fill types on repeats
+            fill_type = "snare_roll" if active_template.energy < 0.7 else "buildup"
+            if occurrence >= 1 and fill_type == "snare_roll":
+                fill_type = "buildup"  # Upgrade fills on repeat
             section.patterns["drums"] = add_drum_fill(
                 section.patterns["drums"],
                 every_n_bars=4,
-                total_bars=template.bars,
-                fill_type="snare_roll" if template.energy < 0.7 else "buildup",
-                energy=template.energy,
+                total_bars=active_template.bars,
+                fill_type=fill_type,
+                energy=active_template.energy,
                 seed=seed + 99,
             )
 
         arrangement.sections.append(section)
-        current_bar += template.bars
+        current_bar += active_template.bars
 
     return arrangement
 

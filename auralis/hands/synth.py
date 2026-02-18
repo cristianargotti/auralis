@@ -85,6 +85,15 @@ class FilterConfig:
 
 
 @dataclass
+class FilterLFO:
+    """LFO modulation for filter cutoff — adds movement to the sound."""
+
+    rate_hz: float = 1.0      # LFO speed (0.1=slow sweep, 8=wobble)
+    depth: float = 0.5        # 0-1, how much the cutoff moves
+    shape: str = "sine"       # sine, triangle
+
+
+@dataclass
 class VoiceConfig:
     """Complete voice configuration."""
 
@@ -93,6 +102,9 @@ class VoiceConfig:
     filter: FilterConfig | None = None
     unison: int = 1
     unison_spread_cents: float = 10.0
+    filter_lfo: FilterLFO | None = None          # Dynamic filter modulation
+    wavetable: list[WaveShape] | None = None      # Morphing waveform sequence
+    wavetable_scan_rate: float = 0.5              # Hz — scan speed through table
 
 
 @dataclass
@@ -141,6 +153,66 @@ _OSC_MAP = {
     "triangle": _osc_triangle,
     "noise": _osc_noise,
 }
+
+
+def wavetable_oscillator(
+    freq_hz: float,
+    duration_s: float,
+    sr: int = 44100,
+    table: list[WaveShape] | None = None,
+    scan_rate: float = 0.5,
+) -> NDArray[np.float64]:
+    """Generate audio that morphs between waveforms over time.
+
+    Creates a wavetable by generating each waveform, then crossfades
+    between them using an LFO-driven scan position — the sound
+    evolves from one timbre to another and back.
+
+    Args:
+        freq_hz: Note frequency.
+        duration_s: Duration in seconds.
+        sr: Sample rate.
+        table: List of waveform shapes to morph between.
+        scan_rate: How fast to scan through the table (Hz).
+
+    Returns:
+        Audio array with timbral evolution.
+    """
+    if not table or len(table) < 2:
+        return generate_oscillator(freq_hz, duration_s, sr)
+
+    n = int(duration_s * sr)
+    t = np.arange(n, dtype=np.float64) / sr
+    phase = freq_hz * t  # Phase accumulator
+
+    # Generate all waveforms in the table
+    waves = []
+    for shape in table:
+        if shape == "pulse":
+            waves.append(_osc_pulse(phase))
+        elif shape in _OSC_MAP:
+            waves.append(_OSC_MAP[shape](phase))
+        else:
+            waves.append(_osc_sine(phase))
+
+    # LFO drives the scan position (triangle wave: 0→1→0→1...)
+    scan_pos = 0.5 * (1.0 + np.sin(2 * np.pi * scan_rate * t))
+    # Scale to table range: 0.0 → (n_waves - 1)
+    scan_idx = scan_pos * (len(waves) - 1)
+
+    # Crossfade between adjacent waveforms
+    output = np.zeros(n, dtype=np.float64)
+    for i in range(len(waves) - 1):
+        # Weight: how much of wave[i] vs wave[i+1] at each sample
+        local = np.clip(scan_idx - i, 0.0, 1.0)
+        output += waves[i] * (1.0 - local) + waves[i + 1] * local
+
+    # Normalize (overlapping contributions)
+    peak = np.max(np.abs(output))
+    if peak > 0:
+        output /= peak
+
+    return output
 
 
 def generate_oscillator(
@@ -220,42 +292,118 @@ def fm_synth(
 # ── Voice Rendering ──────────────────────────────────────
 
 
+def _apply_filter_lfo(
+    audio: NDArray[np.float64],
+    sr: int,
+    base_cutoff: float,
+    lfo: FilterLFO,
+    filter_type: str = "lowpass",
+    resonance: float = 0.7,
+) -> NDArray[np.float64]:
+    """Apply time-varying filter with LFO modulation on cutoff.
+
+    Processes audio in blocks, sweeping the cutoff frequency with
+    the LFO — creates the breathing, evolving quality of analog synths.
+    """
+    from scipy.signal import butter, sosfilt
+
+    n = len(audio)
+    t = np.arange(n, dtype=np.float64) / sr
+
+    # LFO generates cutoff modulation
+    if lfo.shape == "triangle":
+        lfo_signal = 2.0 * np.abs(2.0 * (lfo.rate_hz * t % 1.0) - 1.0) - 1.0
+    else:  # sine
+        lfo_signal = np.sin(2 * np.pi * lfo.rate_hz * t)
+
+    # Block-based processing (filter changes every 512 samples)
+    block_size = 512
+    output = np.zeros(n, dtype=np.float64)
+    nyq = sr / 2.0
+
+    for start in range(0, n, block_size):
+        end = min(start + block_size, n)
+        block = audio[start:end]
+
+        # LFO-modulated cutoff
+        lfo_val = float(np.mean(lfo_signal[start:end]))
+        cutoff = base_cutoff * (1.0 + lfo.depth * lfo_val)
+        cutoff = max(50.0, min(cutoff, nyq * 0.95))
+
+        # Apply filter to this block
+        norm_cutoff = cutoff / nyq
+        if norm_cutoff <= 0.01 or norm_cutoff >= 0.99:
+            output[start:end] = block
+            continue
+
+        try:
+            btype = "low" if filter_type == "lowpass" else "high"
+            sos = butter(4, norm_cutoff, btype=btype, output="sos")
+            output[start:end] = sosfilt(sos, block)
+        except ValueError:
+            output[start:end] = block
+
+    return output
+
+
 def render_voice(
     freq_hz: float,
     duration_s: float,
     sr: int = 44100,
     config: VoiceConfig | None = None,
 ) -> NDArray[np.float64]:
-    """Render a complete synthesizer voice (multi-osc + envelope + filter)."""
+    """Render a complete synthesizer voice.
+
+    Supports: multi-oscillator stacking, unison detuning, wavetable
+    scanning, static and LFO-modulated filtering, ADSR envelope.
+    """
     cfg = config or VoiceConfig()
     n = int(duration_s * sr)
     output = np.zeros(n, dtype=np.float64)
 
-    for osc_cfg in cfg.oscillators:
-        if cfg.unison > 1:
-            # Unison: multiple detuned copies
-            for i in range(cfg.unison):
-                spread = (i - (cfg.unison - 1) / 2) * cfg.unison_spread_cents
-                unison_cfg = OscConfig(
-                    wave=osc_cfg.wave,
-                    detune_cents=osc_cfg.detune_cents + spread,
-                    phase_offset=osc_cfg.phase_offset + i * 0.1,
-                    pw=osc_cfg.pw,
-                    level=osc_cfg.level / cfg.unison,
-                )
-                output += generate_oscillator(freq_hz, duration_s, sr, unison_cfg)
-        else:
-            output += generate_oscillator(freq_hz, duration_s, sr, osc_cfg)
+    # ── Wavetable mode: morphing between waveforms ──
+    if cfg.wavetable and len(cfg.wavetable) >= 2:
+        wt_audio = wavetable_oscillator(
+            freq_hz, duration_s, sr,
+            table=cfg.wavetable,
+            scan_rate=cfg.wavetable_scan_rate,
+        )
+        output += wt_audio
+    else:
+        # ── Standard oscillator rendering ──
+        for osc_cfg in cfg.oscillators:
+            if cfg.unison > 1:
+                for i in range(cfg.unison):
+                    spread = (i - (cfg.unison - 1) / 2) * cfg.unison_spread_cents
+                    unison_cfg = OscConfig(
+                        wave=osc_cfg.wave,
+                        detune_cents=osc_cfg.detune_cents + spread,
+                        phase_offset=osc_cfg.phase_offset + i * 0.1,
+                        pw=osc_cfg.pw,
+                        level=osc_cfg.level / cfg.unison,
+                    )
+                    output += generate_oscillator(freq_hz, duration_s, sr, unison_cfg)
+            else:
+                output += generate_oscillator(freq_hz, duration_s, sr, osc_cfg)
 
-    # Apply filter
+    # ── Filter: static or LFO-modulated ──
     if cfg.filter:
-        output = apply_filter(output, sr, cfg.filter)
+        if cfg.filter_lfo:
+            output = _apply_filter_lfo(
+                output, sr,
+                base_cutoff=cfg.filter.cutoff_hz,
+                lfo=cfg.filter_lfo,
+                filter_type=cfg.filter.type,
+                resonance=cfg.filter.resonance,
+            )
+        else:
+            output = apply_filter(output, sr, cfg.filter)
 
-    # Apply envelope
+    # ── Envelope ──
     envelope = cfg.envelope.generate(duration_s, sr)
     output *= envelope
 
-    # Normalize
+    # ── Normalize ──
     peak = np.max(np.abs(output))
     if peak > 0:
         output = output / peak * 0.9
@@ -510,7 +658,7 @@ PRESETS: dict[str, SynthPatch] = {
     # ── Atmosphere Family (space, story, world-building) ──
     "pad_warm": SynthPatch(
         name="Warm Pad",
-        description="Slow-breathing warmth — the emotional foundation of the track",
+        description="Slow-breathing warmth — wavetable morphing with filter LFO",
         voice=VoiceConfig(
             oscillators=[
                 OscConfig(wave="saw", level=0.5),
@@ -520,11 +668,14 @@ PRESETS: dict[str, SynthPatch] = {
             filter=FilterConfig(type="lowpass", cutoff_hz=3000, resonance=0.3),
             unison=5,
             unison_spread_cents=8.0,
+            filter_lfo=FilterLFO(rate_hz=0.3, depth=0.4, shape="sine"),
+            wavetable=["saw", "triangle", "sine"],
+            wavetable_scan_rate=0.2,
         ),
     ),
     "pad_dark": SynthPatch(
         name="Dark Pad",
-        description="Low, haunting texture — tension and mystery in the background",
+        description="Low, haunting texture — slow wavetable scan with filter sweep",
         voice=VoiceConfig(
             oscillators=[
                 OscConfig(wave="square", level=0.4),
@@ -535,6 +686,9 @@ PRESETS: dict[str, SynthPatch] = {
             filter=FilterConfig(type="lowpass", cutoff_hz=1500, resonance=0.4),
             unison=3,
             unison_spread_cents=12.0,
+            filter_lfo=FilterLFO(rate_hz=0.15, depth=0.6, shape="triangle"),
+            wavetable=["square", "saw", "triangle"],
+            wavetable_scan_rate=0.1,
         ),
     ),
     "texture_noise": SynthPatch(
@@ -544,6 +698,7 @@ PRESETS: dict[str, SynthPatch] = {
             oscillators=[OscConfig(wave="noise", level=0.6)],
             envelope=ADSREnvelope(attack_s=0.5, decay_s=0.3, sustain=0.4, release_s=1.5),
             filter=FilterConfig(type="bandpass", cutoff_hz=2000, resonance=0.5),
+            filter_lfo=FilterLFO(rate_hz=0.5, depth=0.3, shape="sine"),
         ),
     ),
 }

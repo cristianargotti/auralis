@@ -265,6 +265,171 @@ def generate_bassline(
     )
 
 
+# ── Motif Melody Engine ──────────────────────────────────
+# Instead of a random walk, melodies are built from MOTIFS:
+# short memorable phrases that get repeated, transposed, and varied.
+
+
+def _generate_motif(
+    scale_notes: list[int],
+    energy: float,
+    rng: random.Random,
+) -> list[tuple[int, float]]:
+    """Generate a short melodic motif (the hook).
+
+    Returns list of (pitch_index_in_scale, duration_beats) tuples.
+    A motif is 3-6 notes that form a memorable phrase.
+
+    Rules:
+      - Start on a stable tone (root, 3rd, or 5th)
+      - End on a stable tone (creates resolution)
+      - Steps preferred over leaps (singable)
+      - Strong beats get chord tones; weak beats get passing tones
+    """
+    # Motif length: shorter at low energy, longer at high
+    length = 3 if energy < 0.3 else (4 if energy < 0.6 else rng.choice([4, 5, 6]))
+
+    # Stable positions in scale (0=root, 2=3rd, 4=5th)
+    stable = [0, 2, 4]
+    passing = [1, 3, 5, 6] if len(scale_notes) > 5 else [1, 3]
+
+    motif: list[tuple[int, float]] = []
+    n_scale = len(scale_notes)
+
+    # Start on a stable tone
+    pos = rng.choice(stable) % n_scale
+
+    for i in range(length):
+        # Rhythm: strong beats (0, 2) get longer notes
+        is_strong = (i % 2 == 0)
+        if is_strong:
+            dur = rng.choice([0.5, 1.0, 1.0]) if energy > 0.5 else rng.choice([1.0, 1.0, 2.0])
+        else:
+            dur = rng.choice([0.25, 0.5, 0.5]) if energy > 0.5 else rng.choice([0.5, 0.5, 1.0])
+
+        motif.append((pos % n_scale, dur))
+
+        if i < length - 1:
+            # Movement: mostly steps (±1,2), occasional leap
+            if is_strong:
+                # Strong → next strong: target a stable tone
+                step = rng.choice([-2, -1, 1, 2])
+            else:
+                # Weak beat: passing motion
+                step = rng.choice([-1, 1, 1, 2])
+
+            pos = max(0, min(n_scale - 1, pos + step))
+
+    # Force last note to a stable tone (resolution)
+    last_dur = motif[-1][1]
+    motif[-1] = (rng.choice(stable) % n_scale, last_dur)
+
+    return motif
+
+
+def _transpose_motif(
+    motif: list[tuple[int, float]],
+    steps: int,
+    n_scale: int,
+) -> list[tuple[int, float]]:
+    """Transpose all notes by N scale degrees."""
+    return [
+        ((pos + steps) % n_scale, dur) for pos, dur in motif
+    ]
+
+
+def _invert_motif(
+    motif: list[tuple[int, float]],
+    n_scale: int,
+) -> list[tuple[int, float]]:
+    """Invert intervals: if original goes up 2, inversion goes down 2."""
+    if len(motif) < 2:
+        return list(motif)
+
+    result = [motif[0]]
+    for i in range(1, len(motif)):
+        interval = motif[i][0] - motif[i - 1][0]
+        new_pos = (result[-1][0] - interval) % n_scale
+        result.append((new_pos, motif[i][1]))
+    return result
+
+
+def _rhythmic_variation(
+    motif: list[tuple[int, float]],
+    rng: random.Random,
+) -> list[tuple[int, float]]:
+    """Same pitches, different rhythmic pattern."""
+    result: list[tuple[int, float]] = []
+    for pos, dur in motif:
+        # Vary duration: double or halve with some probability
+        r = rng.random()
+        if r < 0.3:
+            new_dur = dur * 0.5  # Compress
+        elif r < 0.6:
+            new_dur = dur * 1.5  # Stretch
+        else:
+            new_dur = dur        # Keep
+        result.append((pos, max(0.25, new_dur)))
+    return result
+
+
+def _extend_motif(
+    motif: list[tuple[int, float]],
+    rng: random.Random,
+    n_scale: int,
+) -> list[tuple[int, float]]:
+    """Add passing tones between existing motif notes."""
+    if len(motif) < 2:
+        return list(motif)
+
+    result = [motif[0]]
+    for i in range(1, len(motif)):
+        # 40% chance to insert a passing tone
+        if rng.random() < 0.4:
+            mid_pos = (motif[i - 1][0] + motif[i][0]) // 2
+            result.append((mid_pos % n_scale, 0.25))
+        result.append(motif[i])
+    return result
+
+
+def _motif_to_notes(
+    motif: list[tuple[int, float]],
+    scale_notes: list[int],
+    start_beat: float,
+    velocity: int,
+    contour_target: float,
+    rng: random.Random,
+) -> list[Note]:
+    """Convert a motif (scale-relative) to absolute Note objects."""
+    notes: list[Note] = []
+    beat = start_beat
+    for pos, dur in motif:
+        pitch = scale_notes[pos % len(scale_notes)]
+        # Velocity follows contour with human variation
+        vel = int(velocity * (0.7 + 0.3 * contour_target)) + rng.randint(-10, 8)
+        notes.append(Note(
+            pitch=pitch,
+            start_beat=beat,
+            duration_beats=dur,
+            velocity=max(40, min(127, vel)),
+        ))
+        beat += dur
+    return notes
+
+
+# Section type → motif arrangement pattern
+# A=original, B=transposed, C=inverted, D=rhythmic var, E=extended
+_SECTION_MOTIF_PATTERNS: dict[str, list[str]] = {
+    "verse":     ["A", "A", "B", "A"],     # AABA — hook by repetition
+    "chorus":    ["A", "B", "A", "B"],     # ABAB — anthemic call & response
+    "drop":      ["A", "A'", "A", "A'"],   # AA'AA' — intensified repetition
+    "bridge":    ["A", "B", "C", "D"],     # ABCD — maximum variety
+    "breakdown": ["A", "rest", "A", "B"],  # Sparse, memorable
+    "intro":     ["rest", "A", "rest", "A"],  # Gentle introduction
+    "outro":     ["A", "B", "A", "rest"],  # Fading, resolving
+}
+
+
 def generate_melody(
     root: str = "C",
     scale: str = "minor",
@@ -275,89 +440,129 @@ def generate_melody(
     seed: int = 42,
     energy: float = 0.5,
     contour: str = "arc",
+    section_type: str = "verse",
+    occurrence: int = 0,
 ) -> Pattern:
-    """Generate a melodic pattern with narrative contour.
+    """Generate a melodic pattern using motif-based composition.
 
-    Contours:
-        arc:      Rises to 2/3, then descends (natural phrasing)
-        climax:   Builds to highest register at the end (pre-drop)
-        tension:  Gradually rises, never resolves (build-up)
-        release:  Starts high, resolves downward (post-drop calm)
-        flat:     No contour bias (ambient, textural)
+    Instead of a random walk, this builds a short motivic hook (3-6 notes)
+    and then arranges it through repetition, transposition, inversion,
+    and rhythmic variation — the way a real composer works.
 
-    Energy controls range, leap probability, and density.
+    Args:
+        root: Key root.
+        scale: Scale type.
+        octave: Base octave.
+        bars: Total bars.
+        density: Note density (affects motif length and rests).
+        velocity: Base velocity.
+        seed: Random seed (shared across occurrences for motif consistency).
+        energy: 0-1 energy level.
+        contour: Narrative shape (arc, climax, tension, release, flat).
+        section_type: Section context for arrangement pattern.
+        occurrence: 0=first time, 1=second, etc. Controls variation level.
+
+    Returns:
+        Pattern with motif-based melody.
     """
     scale_notes = get_scale_notes(root, scale, octave)
-    # Range expands with energy: low=1 octave, high=2+ octaves
+    # Extend range with energy
     n_octaves = 1 if energy < 0.3 else (2 if energy < 0.7 else 3)
-    extended = scale_notes.copy()
+    extended = list(scale_notes)
     for o in range(1, n_octaves):
         extended += [n + 12 * o for n in scale_notes]
 
-    notes: list[Note] = []
-    rng = random.Random(seed)
-
-    position = len(extended) // 2  # Start in middle
-    beat = 0.0
+    n_scale = len(scale_notes)
     total_beats = bars * 4.0
 
-    while beat < total_beats:
-        progress = beat / total_beats  # 0.0 → 1.0
+    # Use base seed for motif generation (shared across occurrences)
+    motif_rng = random.Random(seed)
+    # Use occurrence-offset seed for arrangement decisions
+    arrange_rng = random.Random(seed + occurrence * 37)
 
-        # Contour shapes the target register
+    # ── Phase 1: Generate the core motif ──
+    base_motif = _generate_motif(scale_notes, energy, motif_rng)
+
+    # ── Phase 2: Build variation library ──
+    variations: dict[str, list[tuple[int, float]]] = {
+        "A":    base_motif,
+        "A'":   _rhythmic_variation(base_motif, random.Random(seed + 1)),
+        "B":    _transpose_motif(base_motif, 2, n_scale),   # Up a 3rd
+        "C":    _invert_motif(base_motif, n_scale),
+        "D":    _extend_motif(base_motif, random.Random(seed + 2), n_scale),
+    }
+
+    # Later occurrences shift which variations are used
+    if occurrence == 1:
+        # Second time: swap B for a different transposition
+        variations["B"] = _transpose_motif(base_motif, 4, n_scale)  # Up a 5th
+    elif occurrence >= 2:
+        # Third+: use more exotic variations
+        variations["B"] = _invert_motif(
+            _transpose_motif(base_motif, 3, n_scale), n_scale
+        )
+        variations["A'"] = _extend_motif(base_motif, random.Random(seed + occurrence), n_scale)
+
+    # ── Phase 3: Arrange motifs following section pattern ──
+    pattern = _SECTION_MOTIF_PATTERNS.get(section_type, ["A", "A", "B", "A"])
+
+    # Calculate how many beats per motif slot
+    n_slots = len(pattern)
+    beats_per_slot = total_beats / n_slots
+
+    notes: list[Note] = []
+    for slot_idx, var_key in enumerate(pattern):
+        progress = (slot_idx + 0.5) / n_slots  # 0→1 for contour
+
+        # Contour target
         if contour == "arc":
-            # Peak at 2/3, then descend
             target = 1.0 - abs(progress - 0.66) * 2.0
         elif contour == "climax":
-            # Exponential rise to the top
             target = progress ** 1.5
         elif contour == "tension":
-            # Linear rise, no resolution
             target = progress * 0.9
         elif contour == "release":
-            # Start high, resolve down
             target = 1.0 - progress ** 0.7
-        else:  # flat
+        else:
             target = 0.5
 
-        # Target position in the extended scale
-        target_pos = int(target * (len(extended) - 1))
+        if var_key == "rest":
+            continue  # Silent slot
 
-        # Bias the random walk toward the target
-        if rng.random() < density:
-            # Step toward target with some randomness
-            toward_target = 1 if target_pos > position else (-1 if target_pos < position else 0)
-            # Higher energy = bigger leaps
-            leap_chance = 0.1 + energy * 0.3  # 0.1-0.4
-            if rng.random() < leap_chance:
-                step = toward_target * rng.choice([2, 3, 4])
-            else:
-                step = rng.choice([-1, 0, toward_target, toward_target, 1])
+        motif_data = variations.get(var_key, base_motif)
 
-            position = max(0, min(len(extended) - 1, position + step))
+        # Apply octave shift based on contour target
+        octave_shift = 0
+        if target > 0.7 and n_octaves > 1:
+            octave_shift = 12  # Push up an octave at climax
+        elif target < 0.2 and n_octaves > 1:
+            octave_shift = -12 if octave > 3 else 0
 
-            # Duration: shorter at high energy (busier melodies)
-            if energy > 0.7:
-                dur = rng.choice([0.25, 0.25, 0.5, 0.5, 1.0])
-            elif energy > 0.4:
-                dur = rng.choice([0.25, 0.5, 0.5, 1.0, 1.0, 2.0])
-            else:
-                dur = rng.choice([0.5, 1.0, 1.0, 2.0, 2.0, 4.0])
+        # Render motif into notes at the correct beat position
+        slot_start = slot_idx * beats_per_slot
+        motif_notes = _motif_to_notes(
+            motif_data,
+            [n + octave_shift for n in scale_notes],
+            slot_start,
+            velocity,
+            target,
+            arrange_rng,
+        )
 
-            # Velocity follows contour (louder at peak)
-            contour_vel = int(velocity * (0.7 + 0.3 * target))
-            vel = contour_vel + rng.randint(-12, 8)
+        # Trim notes that extend beyond slot boundary
+        for note in motif_notes:
+            if note.start_beat < slot_start + beats_per_slot:
+                note.duration_beats = min(
+                    note.duration_beats,
+                    slot_start + beats_per_slot - note.start_beat,
+                )
+                notes.append(note)
 
-            notes.append(Note(
-                pitch=extended[position],
-                start_beat=beat,
-                duration_beats=min(dur, total_beats - beat),
-                velocity=max(40, min(127, vel)),
-            ))
-            beat += dur
-        else:
-            # Rest — duration also energy-dependent
-            beat += rng.choice([0.25, 0.5]) if energy > 0.5 else rng.choice([0.5, 1.0])
+        # Add a rest gap between motif repetitions for breathing
+        # (density controls how much silence)
+        if arrange_rng.random() > density and slot_idx < n_slots - 1:
+            # Skip a beat of silence after this motif
+            pass  # Natural gap from motif not filling the slot
 
     return Pattern(
         name=f"Melody ({root} {scale})",
