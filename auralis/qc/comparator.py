@@ -58,13 +58,15 @@ class ComparisonResult:
     strongest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        # Convert all values to native Python types — numpy.bool_ / numpy.float64
+        # crash FastAPI's jsonable_encoder ("numpy.bool object is not iterable")
         d = {
-            "dimensions": {ds.name: {"score": ds.score, "detail": ds.detail} for ds in self.dimensions},
-            "overall_score": round(self.overall_score, 2),
-            "target_score": self.target_score,
-            "passed": self.passed,
-            "weakest": self.weakest,
-            "strongest": self.strongest,
+            "dimensions": {ds.name: {"score": float(ds.score), "detail": str(ds.detail)} for ds in self.dimensions},
+            "overall_score": float(round(self.overall_score, 2)),
+            "target_score": float(self.target_score),
+            "passed": bool(self.passed),
+            "weakest": str(self.weakest),
+            "strongest": str(self.strongest),
         }
         return d
 

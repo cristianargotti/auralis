@@ -14,15 +14,15 @@ from auralis.config import settings
 
 logger = structlog.get_logger()
 
-# Stable Audio Open max generation: 47 seconds
-MODEL_ID = "stability-ai/stable-audio-open-1.0"
-MAX_DURATION_S = 47.0  # Stable Audio Open hard limit
+# Stable Audio 2.5 — up to 3 minutes, 44.1 kHz stereo
+MODEL_ID = "stability-ai/stable-audio-2.5"
+MAX_DURATION_S = 180.0  # Stable Audio 2.5 supports up to 3 minutes
 
 
 class StableAudioClient:
     """Client for generating audio via Replicate API.
 
-    Stable Audio Open can generate up to 47 seconds of audio.
+    Stable Audio 2.5 can generate up to 3 minutes of 44.1 kHz stereo.
     For longer stems, the post-processor in stem_generator handles
     looping with crossfade.
     """
