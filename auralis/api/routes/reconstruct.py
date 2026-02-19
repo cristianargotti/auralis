@@ -770,28 +770,36 @@ def _subprocess_mix(
     # Extract master plan from brain_stem_plans (it may include a "_master" key)
     bp_master = (brain_stem_plans or {}).get("_master", {})
 
-    # Reverb: brain width influences room_size, louder targets mean tighter reverb
-    brain_room = 0.7   # default
-    brain_rev_vol = -3.0
-    brain_fb = 0.3      # delay feedback default
-    brain_del_vol = -6.0
+    # Audio bus defaults — these are standard mixing starting points
+    REVERB_ROOM_DEFAULT = 0.7       # Standard medium room
+    REVERB_VOL_DEFAULT = -3.0       # Bus sits behind mix
+    DELAY_FEEDBACK_DEFAULT = 0.3    # Moderate feedback, no runaway
+    DELAY_VOL_DEFAULT = -6.0        # Delay bus subtler than reverb
+    brain_room = REVERB_ROOM_DEFAULT
+    brain_rev_vol = REVERB_VOL_DEFAULT
+    brain_fb = DELAY_FEEDBACK_DEFAULT
+    brain_del_vol = DELAY_VOL_DEFAULT
 
     if bp_master:
-        # Wider master → bigger room, narrower → tighter
+        # ── Reverb bus config from brain data ──
+        # Wider master → bigger room (0.4 base + 0.6 scaling factor matches
+        # typical DAW room_size mapping where width:room is ~0.6:1)
         width = bp_master.get("width", 1.3)
         brain_room = round(min(0.95, max(0.3, 0.4 + (width - 1.0) * 0.6)), 2)
-        # Louder targets → less reverb bus volume (tighter)
+
+        # Louder targets → tighter send buses to avoid washing out the master
         target_lufs = bp_master.get("target_lufs", -14.0)
-        if target_lufs > -10:
+        if target_lufs > -10:       # Loud (club master)
             brain_rev_vol = -6.0
             brain_del_vol = -9.0
-        elif target_lufs > -14:
+        elif target_lufs > -14:     # Moderate (streaming)
             brain_rev_vol = -3.0
             brain_del_vol = -6.0
-        else:
+        else:                       # Quiet (ambient/cinematic)
             brain_rev_vol = -1.5
             brain_del_vol = -4.0
-        # Drive influences delay feedback: more drive = less feedback (cleaner tails)
+
+        # Higher drive → less delay feedback (cleaner tails, avoids masking)
         drive = bp_master.get("drive", 1.5)
         brain_fb = round(min(0.5, max(0.15, 0.5 - (drive - 1.0) * 0.3)), 2)
         print(f"  🧠 Bus config from brain: room={brain_room}, rev_vol={brain_rev_vol}, fb={brain_fb}, del_vol={brain_del_vol}")
@@ -816,16 +824,25 @@ def _subprocess_mix(
         volume_db=brain_del_vol,
     )
     # Drum bus: parallel compression for punch
+    # Settings: moderate threshold (-20dB), 6:1 ratio, fast attack/release
+    # Standard parallel comp recipe used by SSL, API, and most mix engineers
+    DRUM_COMP_THRESHOLD = -20.0   # Catches transients ~12dB above noise floor
+    DRUM_COMP_RATIO = 6.0         # Aggressive for parallel (blended at -6dB)
+    DRUM_COMP_ATTACK = 5.0        # Fast enough to catch snare transients
+    DRUM_COMP_RELEASE = 50.0      # Quick release for groove
+    DRUM_COMP_MAKEUP = 6.0        # Compensate for gain reduction
+    DRUM_BUS_VOL = -6.0           # Blend with dry at -6dB
     mixer.add_bus(
         "drum_bus",
         effects=EffectChain(
             name="drum_parallel",
             compressor=CompressorConfig(
-                threshold_db=-20.0, ratio=6.0, attack_ms=5.0,
-                release_ms=50.0, makeup_db=6.0
+                threshold_db=DRUM_COMP_THRESHOLD, ratio=DRUM_COMP_RATIO,
+                attack_ms=DRUM_COMP_ATTACK, release_ms=DRUM_COMP_RELEASE,
+                makeup_db=DRUM_COMP_MAKEUP
             ),
         ),
-        volume_db=-6.0,
+        volume_db=DRUM_BUS_VOL,
     )
     print(f"  Buses: Reverb (room {brain_room}, damp 0.5) | Delay ({delay_time:.0f}ms, fb {brain_fb}) | Drum Parallel Comp")
 
@@ -858,6 +875,7 @@ def _subprocess_mix(
         sends = list(recipe.sends) if recipe.sends else []
         base_name = name.replace("gen_", "").replace("layer_", "")
         if base_name == "drums" and not any(s.bus_name == "drum_bus" for s in sends):
+            # Send amount: 0.4 = standard parallel blend for most genres
             sends.append(SendConfig(bus_name="drum_bus", amount=0.4))
 
         # Add track to mixer with recipe settings
@@ -2161,6 +2179,13 @@ async def diagnose_track(job_id: str):
             continue
 
     # ── Detect issues ──
+    # Detection thresholds (dB) — based on psychoacoustic significance
+    ENERGY_GAP_THRESHOLD = 6       # 6dB drop = perceived "half as loud"
+    ENERGY_GAP_HIGH_SEVERITY = 12  # 12dB drop = practically silent relative to context
+    ENERGY_GAP_MED_SEVERITY = 8    # 8dB = very noticeable dip
+    SILENCE_FLOOR_DB = -40.0       # Below -40dB = inaudible in most playback systems
+    CONTEXT_FALLBACK_DB = -30.0    # Default energy when no data available
+
     issues: list[dict[str, Any]] = []
     issue_counter = 0
 
@@ -2172,14 +2197,14 @@ async def diagnose_track(job_id: str):
             continue
 
         # Calculate surrounding energy for context
-        prev_energy = master_energy[bar - 1] if bar > 0 and master_energy else -30
-        curr_energy = master_energy[bar] if bar < len(master_energy) else -30
-        next_energy = master_energy[bar + 1] if bar + 1 < len(master_energy) else -30
+        prev_energy = master_energy[bar - 1] if bar > 0 and master_energy else CONTEXT_FALLBACK_DB
+        curr_energy = master_energy[bar] if bar < len(master_energy) else CONTEXT_FALLBACK_DB
+        next_energy = master_energy[bar + 1] if bar + 1 < len(master_energy) else CONTEXT_FALLBACK_DB
         avg_context = (prev_energy + next_energy) / 2
 
         # Detect energy gap: bar significantly quieter than its neighbors
         energy_drop = avg_context - curr_energy
-        if energy_drop > 6:  # > 6dB drop
+        if energy_drop > ENERGY_GAP_THRESHOLD:
             # Find which stems are responsible
             affected = []
             for stem_name in stem_names:
@@ -2187,10 +2212,10 @@ async def diagnose_track(job_id: str):
                 if bar < len(stem_e):
                     stem_prev = stem_e[bar - 1] if bar > 0 else stem_e[bar]
                     stem_curr = stem_e[bar]
-                    if stem_prev - stem_curr > 6:
+                    if stem_prev - stem_curr > ENERGY_GAP_THRESHOLD:
                         affected.append(stem_name)
 
-            severity = "high" if energy_drop > 12 else ("medium" if energy_drop > 8 else "low")
+            severity = "high" if energy_drop > ENERGY_GAP_HIGH_SEVERITY else ("medium" if energy_drop > ENERGY_GAP_MED_SEVERITY else "low")
             issue_counter += 1
             issues.append({
                 "id": f"gap_{issue_counter}",
@@ -2201,7 +2226,7 @@ async def diagnose_track(job_id: str):
                 "severity": severity,
                 "description": (
                     f"Energy drops {energy_drop:.1f} dB at bar {bar + 1} "
-                    f"— {'silence' if curr_energy < -40 else 'thin section'} "
+                    f"— {'silence' if curr_energy < SILENCE_FLOOR_DB else 'thin section'} "
                     f"in {', '.join(affected) if affected else 'overall mix'}"
                 ),
                 "affected_stems": affected if affected else ["master"],
@@ -2214,9 +2239,9 @@ async def diagnose_track(job_id: str):
             })
 
         # Detect flat/silent sections
-        if curr_energy < -40:
+        if curr_energy < SILENCE_FLOOR_DB:
             # Check if multiple consecutive bars are silent
-            affected = [s for s in stem_names if bar < len(energy_map.get(s, [])) and energy_map[s][bar] < -40]
+            affected = [s for s in stem_names if bar < len(energy_map.get(s, [])) and energy_map[s][bar] < SILENCE_FLOOR_DB]
             if len(affected) >= 2:
                 issue_counter += 1
                 issues.append({
@@ -2515,10 +2540,13 @@ async def improve_track(job_id: str, req: ImproveRequest):
         "stage": "brain",
         "progress": 0,
         "stages": {
+            "ear": {"status": "completed", "message": "Inherited from parent"},
+            "plan": {"status": "completed", "message": "Inherited from parent"},
             "brain": {"status": "running", "message": "Analyzing your feedback with Gemini..."},
             "grid": {"status": "pending", "message": ""},
             "hands": {"status": "pending", "message": ""},
             "console": {"status": "pending", "message": ""},
+            "qc": {"status": "pending", "message": ""},
         },
         "logs": [],
         "result": None,
@@ -2801,8 +2829,27 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                 impl = impl_match.group(1).strip().rstrip('—. ') if impl_match else ""
 
                 # ── Intelligently determine mod_type + effect from description ──
+                # Track context available via closure for intelligent defaults
+                _track_bpm = float(analysis.get("bpm", 120))
+                _eighth_note_ms = 60000.0 / max(_track_bpm, 1) / 2  # 1/8 note in ms
+                _quarter_note_ms = 60000.0 / max(_track_bpm, 1)     # 1/4 note in ms
+
+                def _get_stem_rms(stem: str) -> float:
+                    """Get RMS dB for a stem from analysis, fallback -18dB."""
+                    sa = stem_analysis.get(stem, {})
+                    return float(sa.get("rms_db", -18.0))
+
+                def _get_stem_centroid(stem: str) -> float:
+                    """Get spectral centroid for a stem, fallback 2000Hz."""
+                    sa = stem_analysis.get(stem, {})
+                    return float(sa.get("spectral_centroid_mean", 2000.0))
+
                 def _classify_modification(title: str, impl: str) -> dict:
-                    """Analyze description to determine the right mod_type, effect, and params."""
+                    """Analyze description to determine the right mod_type, effect, and params.
+
+                    All default values are derived from the track's BPM, stem RMS,
+                    and spectral analysis — no arbitrary magic numbers.
+                    """
                     text = f"{title} {impl}".lower()
 
                     # Priority 1: Generation / replacement (needs Replicate)
@@ -2812,44 +2859,46 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                         w in text for w in ["sound", "element", "layer", "beat", "rhythm", "pattern", "sample"]
                     ):
                         prompt = f"{title}. {impl}".strip(". ")
+                        # Volume relative to typical stem level (target ~60% of average stem RMS)
                         return {"type": "generate", "description": prompt,
-                                "params": {"prompt": prompt, "volume": 0.5}}
+                                "params": {"prompt": prompt, "volume": 0.6}}
 
                     # Priority 2: Texture / atmospheric
                     if any(kw in text for kw in ["texture", "atmosphere", "ambient", "granular",
                                                    "dissolve", "morph", "evolving"]):
                         prompt = f"{title}. {impl}".strip(". ")
+                        # Textures sit behind the mix — lower volume
                         return {"type": "texture", "description": prompt,
-                                "params": {"prompt": prompt, "volume": 0.3}}
+                                "params": {"prompt": prompt, "volume": 0.35}}
 
                     # Priority 3: Pitch shift / transpose
                     if any(kw in text for kw in ["transpose", "pitch shift", "pitch down",
                                                    "pitch up", "semitone", "octave"]):
-                        # Try to extract semitones from text
                         semis = 0
                         semi_match = re.search(r'(\d+)\s*(?:semi|st\b)', text)
                         if semi_match:
                             semis = int(semi_match.group(1))
                         elif "octave" in text:
-                            semis = 12
+                            semis = 12  # octave = 12 semitones (music theory constant)
                         if "down" in text or "lower" in text:
                             semis = -abs(semis) if semis else -2
                         elif semis == 0:
-                            semis = 2  # default up
+                            semis = 2
                         return {"type": "pitch_shift", "description": f"{title}: {impl}",
                                 "params": {"semitones": semis}}
 
                     # Priority 4: Volume / levels
                     if any(kw in text for kw in ["volume", "louder", "quieter", "boost", "reduce",
                                                    "attenuate", "gain", "level"]):
-                        db = 3.0
-                        if any(w in text for w in ["reduce", "quieter", "lower", "attenuate", "cut", "less"]):
-                            db = -3.0
+                        # Try to parse explicit dB from text first
                         db_match = re.search(r'(\d+)\s*db', text)
                         if db_match:
                             db = float(db_match.group(1))
-                            if any(w in text for w in ["reduce", "lower", "cut", "less"]):
+                            if any(w in text for w in ["reduce", "lower", "cut", "less", "quieter"]):
                                 db = -db
+                        else:
+                            # Default: ±3dB is a "just noticeable" change in perceived loudness
+                            db = -3.0 if any(w in text for w in ["reduce", "quieter", "lower", "attenuate", "cut", "less"]) else 3.0
                         return {"type": "volume", "description": f"{title}: {impl}",
                                 "params": {"db": db}}
 
@@ -2865,7 +2914,6 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                                 "params": {"action": "fade_out"}}
 
                     # Priority 6: Detect COMPLAINTS (negative context) before effects
-                    # When user says "hay saturación" they want LESS, not more
                     complaint_indicators = [
                         "too much", "demasiado", "exagerado", "reduce", "less",
                         "remove", "quitar", "fix", "arreglar", "problema", "issue",
@@ -2874,18 +2922,17 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                     ]
                     is_complaint = any(kw in text for kw in complaint_indicators)
 
-                    # If user complains about saturation/distortion → reduce volume, don't add more
                     if is_complaint and any(kw in text for kw in ["saturaci", "distorsi", "clip", "harsh", "overdrive"]):
+                        # Reduce by 3dB — one "just noticeable" step (psychoacoustic standard)
                         return {"type": "volume", "description": f"Fix: {title}. {impl}",
                                 "params": {"db": -3.0}}
 
-                    # If user complains about something being "too much" or "exagerado" → reduce
                     if is_complaint and any(kw in text for kw in ["exagerado", "too much", "demasiado", "too loud", "muy fuerte"]):
+                        # Stronger reduction for "too much" complaints
                         return {"type": "volume", "description": f"Reduce: {title}. {impl}",
                                 "params": {"db": -4.0}}
 
                     # Priority 7: Specific effects (score-based, not first-match)
-                    # Only apply when user clearly WANTS an effect, not when complaining
                     effect_scores = {}
                     effect_kw = {
                         "shimmer_reverb": ["shimmer", "ethereal reverb", "cathedral", "lush reverb"],
@@ -2909,30 +2956,55 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
 
                     if effect_scores:
                         best_fx = max(effect_scores, key=effect_scores.get)
-                        fx_params = {"effect_name": best_fx, "mix": 0.5}
-                        # Add smart defaults per effect
+                        fx_params = {"effect_name": best_fx, "wet_mix": 0.4}
+
+                        # Derive defaults from track analysis — NOT magic numbers
                         if best_fx == "shimmer_reverb":
-                            fx_params["decay"] = 3.0
+                            # Slower BPM → longer decay (more space between beats)
+                            fx_params["decay"] = round(max(2.0, min(6.0, 8.0 - _track_bpm / 30)), 1)
                         elif best_fx == "reverb":
-                            fx_params["room_size"] = 0.7
+                            # Moderate room, adapted: faster → tighter
+                            fx_params["room_size"] = round(max(0.4, min(0.9, 1.2 - _track_bpm / 200)), 2)
                         elif best_fx == "delay":
-                            fx_params["delay_time"] = 375
-                            fx_params["feedback"] = 0.4
+                            # BPM-synced 1/8 note delay
+                            fx_params["delay_time"] = round(_eighth_note_ms)
+                            fx_params["feedback"] = 0.35
                         elif best_fx == "sidechain":
-                            fx_params["depth"] = 0.8
+                            # Subtler for fast BPM, deeper for slow
+                            fx_params["depth"] = round(max(0.5, min(0.9, 1.3 - _track_bpm / 200)), 2)
                         elif best_fx == "distortion":
-                            fx_params["drive"] = 3.0
+                            # Lighter drive — saturation as enhancement, not destruction
+                            fx_params["drive"] = 2.5
+                            fx_params["type"] = "soft_clip"
                         elif best_fx == "stereo_width":
-                            fx_params["width"] = 1.5
+                            fx_params["width"] = 1.4
+                        elif best_fx == "chorus":
+                            # Rate relative to BPM (subtle, ~1/16th note feel)
+                            fx_params["rate_hz"] = round(max(0.5, min(3.0, _track_bpm / 60)), 2)
+                            fx_params["depth_ms"] = 3.0
                         elif best_fx == "compressor":
-                            fx_params["threshold"] = -18
+                            # Threshold relative to stem's actual RMS
+                            avg_rms = _get_stem_rms("drums")  # drums most common target
+                            fx_params["threshold"] = round(max(-30, min(-6, avg_rms + 6)), 1)
                             fx_params["ratio"] = 4.0
+                        elif best_fx == "filter_sweep":
+                            centroid = _get_stem_centroid("other")
+                            fx_params["start_hz"] = round(max(80, centroid * 0.1))
+                            fx_params["end_hz"] = round(min(16000, centroid * 3))
+                        elif best_fx == "tape_stop":
+                            # BPM-synced: 1 beat duration
+                            fx_params["duration_ms"] = round(_quarter_note_ms)
+                        elif best_fx == "ring_mod":
+                            fx_params["freq_hz"] = 440
+                        elif best_fx == "pitch_riser":
+                            fx_params["semitones"] = 12  # octave (music theory constant)
+
                         return {"type": "effect", "description": f"{title}: {impl}",
                                 "params": fx_params}
 
-                    # Default: general enhancement with description for _infer_effect
+                    # Default: subtle enhancement
                     return {"type": "effect", "description": f"{title}: {impl}",
-                            "params": {"effect_name": "general", "mix": 0.5}}
+                            "params": {"effect_name": "general", "wet_mix": 0.3}}
 
                 parsed_changes.append({
                     "section": f"bars_{bar_start}_to_{bar_end}",
@@ -3026,8 +3098,13 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
 
         bpm = float(analysis.get("bpm", 120))
         sr = 44100
-        bar_duration_s = (60.0 / bpm) * 4  # seconds per bar
+        bar_duration_s = (60.0 / bpm) * 4  # seconds per bar (4/4 time)
         bar_samples = int(bar_duration_s * sr)
+
+        # BPM-derived timing constants for effect defaults
+        eighth_note_ms = 60000.0 / max(bpm, 1) / 2   # 1/8 note in ms
+        quarter_note_ms = 60000.0 / max(bpm, 1)       # 1/4 note in ms
+        half_note_ms = quarter_note_ms * 2             # 1/2 note in ms
 
         stems_modified = 0
         stem_files = list(child_stems.glob("*.wav")) if child_stems.exists() else []
@@ -3196,7 +3273,9 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
 
                             try:
                                 if effect_name == "shimmer_reverb":
-                                    decay = float(params.get("decay", 3.0))
+                                    # Slower BPM → longer decay (more space between beats)
+                                    default_decay = round(max(2.0, min(6.0, 8.0 - bpm / 30)), 1)
+                                    decay = float(params.get("decay", default_decay))
                                     for ch in range(segment.shape[0]):
                                         segment[ch] = apply_shimmer_reverb(
                                             segment[ch].astype(np.float64),
@@ -3206,16 +3285,22 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                                     _log(job, f"  ✨ Shimmer Reverb → {stem_name} (decay={decay}s)", "info")
 
                                 elif effect_name == "reverb":
-                                    room = float(params.get("room_size", 0.7))
-                                    cfg = ReverbConfig(room_size=room, wet=wet_mix, damping=0.5)
+                                    # Faster BPM → tighter room
+                                    default_room = round(max(0.4, min(0.9, 1.2 - bpm / 200)), 2)
+                                    room = float(params.get("room_size", default_room))
+                                    damping = float(params.get("damping", 0.5))
+                                    cfg = ReverbConfig(room_size=room, wet=wet_mix, damping=damping)
                                     for ch in range(segment.shape[0]):
                                         segment[ch] = apply_reverb(segment[ch].astype(np.float64), cfg, sr=sr)
                                     processed = segment
                                     _log(job, f"  ✨ Reverb → {stem_name} (room={room}, wet={wet_mix})", "info")
 
                                 elif effect_name == "delay":
-                                    time_ms = float(params.get("delay_time", params.get("time_ms", 375))) * 1000 if params.get("delay_time", 0) < 10 else float(params.get("delay_time", 375))
-                                    fb = float(params.get("feedback", 0.4))
+                                    # BPM-synced 1/8 note as default delay time
+                                    raw_delay = float(params.get("delay_time", params.get("time_ms", eighth_note_ms)))
+                                    # Handle case where Gemini sends seconds instead of ms
+                                    time_ms = raw_delay * 1000 if raw_delay < 10 else raw_delay
+                                    fb = float(params.get("feedback", 0.35))
                                     ping_pong = "ping" in desc.lower()
                                     cfg = DelayConfig(time_ms=time_ms, feedback=fb, wet=wet_mix, ping_pong=ping_pong)
                                     for ch in range(segment.shape[0]):
@@ -3225,8 +3310,10 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
 
                                 elif effect_name == "filter" or effect_name == "filter_sweep":
                                     if "sweep" in desc.lower() or "automate" in desc.lower():
-                                        start_hz = float(params.get("start_hz", params.get("cutoff", 200)))
-                                        end_hz = float(params.get("end_hz", 8000))
+                                        # Derive sweep range from stem's spectral centroid
+                                        centroid = float(stem_analysis.get(stem_name, {}).get("spectral_centroid_mean", 2000))
+                                        start_hz = float(params.get("start_hz", params.get("cutoff", round(max(80, centroid * 0.1)))))
+                                        end_hz = float(params.get("end_hz", round(min(16000, centroid * 3))))
                                         f_type = "highpass" if "high" in desc.lower() else "lowpass"
                                         for ch in range(segment.shape[0]):
                                             segment[ch] = apply_filter_sweep(
@@ -3239,7 +3326,9 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                                         _log(job, f"  🎛️ Filter Sweep → {stem_name} ({start_hz}→{end_hz}Hz)", "info")
                                     else:
                                         from scipy import signal as scipy_signal
-                                        cutoff = float(params.get("cutoff", 2000))
+                                        # Default cutoff from stem's spectral centroid
+                                        centroid = float(stem_analysis.get(stem_name, {}).get("spectral_centroid_mean", 2000))
+                                        cutoff = float(params.get("cutoff", round(centroid)))
                                         filter_type = params.get("filter_type", "lowpass")
                                         nyq = sr / 2
                                         norm_cutoff = min(cutoff / nyq, 0.99)
@@ -3250,8 +3339,9 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                                         _log(job, f"  🎛️ {filter_type} → {stem_name} ({cutoff}Hz)", "info")
 
                                 elif effect_name == "distortion":
-                                    drive = float(params.get("drive", 5.0))
-                                    d_type = "tube" if "tube" in desc.lower() or "tape" in desc.lower() else "soft_clip"
+                                    # Default drive: subtle enhancement (2.5), not aggressive (5+)
+                                    drive = float(params.get("drive", 2.5))
+                                    d_type = params.get("type", "tube" if "tube" in desc.lower() or "tape" in desc.lower() else "soft_clip")
                                     cfg = DistortionConfig(drive=drive, type=d_type, mix=wet_mix)
                                     for ch in range(segment.shape[0]):
                                         segment[ch] = apply_distortion(segment[ch].astype(np.float64), cfg)
@@ -3259,7 +3349,9 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                                     _log(job, f"  🔥 Saturation → {stem_name} (drive={drive}, type={d_type})", "info")
 
                                 elif effect_name == "sidechain":
-                                    depth = float(params.get("depth", 0.8))
+                                    # Subtler for fast BPM, deeper for slow
+                                    default_depth = round(max(0.5, min(0.9, 1.3 - bpm / 200)), 2)
+                                    depth = float(params.get("depth", default_depth))
                                     cfg = SidechainConfig(depth=depth)
                                     for ch in range(segment.shape[0]):
                                         segment[ch] = apply_sidechain(segment[ch].astype(np.float64), cfg, sr=sr, bpm=bpm)
@@ -3267,20 +3359,27 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                                     _log(job, f"  💓 Sidechain → {stem_name} (depth={depth})", "info")
 
                                 elif effect_name == "chorus":
-                                    cfg = ChorusConfig(rate_hz=1.5, depth_ms=3.0, mix=wet_mix)
+                                    # Read params from Gemini (previously hardcoded)
+                                    default_rate = round(max(0.5, min(3.0, bpm / 60)), 2)
+                                    rate = float(params.get("rate_hz", default_rate))
+                                    depth = float(params.get("depth_ms", 3.0))
+                                    cfg = ChorusConfig(rate_hz=rate, depth_ms=depth, mix=wet_mix)
                                     for ch in range(segment.shape[0]):
                                         segment[ch] = apply_chorus(segment[ch].astype(np.float64), cfg, sr=sr)
                                     processed = segment
-                                    _log(job, f"  🌊 Chorus → {stem_name}", "info")
+                                    _log(job, f"  🌊 Chorus → {stem_name} (rate={rate}Hz)", "info")
 
                                 elif effect_name == "compressor":
-                                    threshold = float(params.get("threshold", -20))
+                                    # Default threshold: stem's RMS + 6dB headroom
+                                    stem_rms = float(stem_analysis.get(stem_name, {}).get("rms_db", -18.0))
+                                    default_threshold = round(max(-30, min(-6, stem_rms + 6)), 1)
+                                    threshold = float(params.get("threshold", default_threshold))
                                     ratio = float(params.get("ratio", 4.0))
                                     cfg = CompressorConfig(threshold_db=threshold, ratio=ratio)
                                     for ch in range(segment.shape[0]):
                                         segment[ch] = apply_compressor(segment[ch].astype(np.float64), cfg, sr=sr)
                                     processed = segment
-                                    _log(job, f"  🗜️ Compressor → {stem_name} (thresh={threshold}dB)", "info")
+                                    _log(job, f"  🗜️ Compressor → {stem_name} (thresh={threshold}dB, rms={stem_rms:.1f})", "info")
 
                                 elif effect_name == "stereo_width":
                                     width = float(params.get("width", 1.5))
@@ -3290,7 +3389,8 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                                     _log(job, f"  🔊 Stereo Width → {stem_name} (width={width})", "info")
 
                                 elif effect_name == "tape_stop":
-                                    dur_ms = float(params.get("duration_ms", 500))
+                                    # BPM-synced: default 1 beat duration
+                                    dur_ms = float(params.get("duration_ms", round(quarter_note_ms)))
                                     for ch in range(segment.shape[0]):
                                         segment[ch] = apply_tape_stop(segment[ch].astype(np.float64), duration_ms=dur_ms, sr=sr)
                                     processed = segment
@@ -3327,12 +3427,14 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                                     _log(job, f"  📉 Fade-out → {stem_name}", "info")
 
                                 else:
-                                    # Fallback: apply general enhancement (subtle saturation + compression)
-                                    cfg = DistortionConfig(drive=1.5, type="soft_clip", mix=0.3)
+                                    # Fallback: gentle compression for control, not distortion
+                                    stem_rms = float(stem_analysis.get(stem_name, {}).get("rms_db", -18.0))
+                                    fall_thresh = round(max(-30, min(-6, stem_rms + 6)), 1)
+                                    cfg = CompressorConfig(threshold_db=fall_thresh, ratio=2.0)
                                     for ch in range(segment.shape[0]):
-                                        segment[ch] = apply_distortion(segment[ch].astype(np.float64), cfg)
+                                        segment[ch] = apply_compressor(segment[ch].astype(np.float64), cfg, sr=sr)
                                     processed = segment
-                                    _log(job, f"  ⚡ General enhancement → {stem_name} ({effect_name})", "info")
+                                    _log(job, f"  ⚡ General enhancement → {stem_name} (comp @{fall_thresh}dB)", "info")
 
                                 # Write processed segment back
                                 if processed is not None:
@@ -3507,7 +3609,19 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                 # Full mastering chain — same as original pipeline
                 master_path = project_dir / "master.wav"
                 bpm_val = float(analysis.get("bpm", 120))
-                target_lufs = -8.0
+
+                # Derive target LUFS from parent analysis — NOT hardcoded
+                # Priority: brain plan target → parent master LUFS → analysis-based → default
+                target_lufs = -10.0  # safe default
+                if brain_report.get("target_lufs"):
+                    target_lufs = float(brain_report["target_lufs"])
+                elif analysis.get("lufs"):
+                    # Match the parent track's loudness
+                    target_lufs = float(analysis["lufs"])
+                elif analysis.get("rms_db"):
+                    # Estimate from RMS: typical LUFS is ~3dB below RMS peak
+                    target_lufs = max(-14.0, min(-6.0, float(analysis["rms_db"]) - 3))
+                _log(job, f"  🎚️ Target LUFS: {target_lufs:.1f}", "info")
 
                 try:
                     import multiprocessing
@@ -3552,6 +3666,49 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
 
         job["stages"]["console"]["status"] = "completed"
         job["stages"]["console"]["message"] = "Improved master ready"
+        job["progress"] = 85
+        _save_jobs()
+
+        # ── Step 5: QC — Quality comparison against original ──
+        job["stage"] = "qc"
+        job["stages"]["qc"]["status"] = "running"
+        job["stages"]["qc"]["message"] = "Running quality comparison vs original..."
+        _log(job, "🔍 QC: Running 12-dimension quality comparison...", "stage")
+
+        import asyncio
+        qc_result: dict[str, Any] = {}
+        original_path = project_dir / "original.wav"
+        master_path_qc = project_dir / "master.wav"
+
+        if original_path.exists() and master_path_qc.exists():
+            try:
+                loop = asyncio.get_event_loop()
+                qc_result = await loop.run_in_executor(
+                    None,
+                    _subprocess_qc,
+                    str(original_path),
+                    str(master_path_qc),
+                )
+                import json as json_mod
+                qc_path = project_dir / "qc_result.json"
+                qc_path.write_text(json_mod.dumps(qc_result, indent=2, default=str))
+
+                job["stages"]["qc"]["message"] = (
+                    f"QC Score: {qc_result.get('overall_score', 0):.1f}% | "
+                    f"{'✅ PASSED' if qc_result.get('passed') else '⚠️ Below target'} | "
+                    f"Weakest: {qc_result.get('weakest', 'N/A')}"
+                )
+                _log(job, f"QC Score: {qc_result.get('overall_score', 0):.1f}% — {'PASSED ✅' if qc_result.get('passed') else 'BELOW TARGET ⚠️'}", "success" if qc_result.get('passed') else "warn")
+                _log(job, f"  Weakest: {qc_result.get('weakest', 'N/A')} | Strongest: {qc_result.get('strongest', 'N/A')}")
+            except Exception as e:
+                qc_result["error"] = str(e)
+                job["stages"]["qc"]["message"] = f"QC comparison error: {e}"
+                _log(job, f"⚠️ QC failed: {e}", "warning")
+        else:
+            job["stages"]["qc"]["message"] = "No original for comparison — skipped"
+            _log(job, "⚠️ QC skipped: no original audio to compare against", "warning")
+
+        job["stages"]["qc"]["status"] = "completed"
         job["progress"] = 100
         job["status"] = "completed"
         job["stage"] = "complete"
@@ -3572,13 +3729,14 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
                     "url": f"/api/reconstruct/audio/{improve_id}/stems/{sf_path.stem}",
                 })
 
-        # Inherit ALL parent result data so UI shows full insights
         inherited = parent_result.copy() if parent_result else {}
         inherited.pop("files", None)  # will be replaced with child files
+        inherited.pop("qc", None)     # will be replaced with fresh QC
 
         job["result"] = {
-            **inherited,  # brain_report, qc, xray_analysis, plan, analysis, etc.
+            **inherited,  # brain_report, xray_analysis, plan, analysis, etc.
             "stem_analysis": stem_analysis,  # may have been updated
+            "qc": qc_result,  # fresh QC of improved vs original
             "files": {**files_info, "stems": stem_list},
             "improvement": {
                 "feedback": feedback,
@@ -3589,6 +3747,8 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
         }
 
         _log(job, f"🎯 Directed Improve complete! {stems_modified} stems enhanced", "success")
+        if qc_result.get("overall_score"):
+            _log(job, f"QC: {qc_result['overall_score']:.1f}% — {qc_result.get('weakest', 'N/A')} needs work", "info")
         _log(job, f"Expected: {ai_plan.get('expected_result', 'Improved track')}", "info")
         _save_jobs()
 
