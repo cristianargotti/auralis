@@ -3719,14 +3719,23 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
         job["status"] = "completed"
         job["stage"] = "complete"
 
-        # ── Save analysis.json so frontend can load Track DNA, QC, Verdict ──
-        # The frontend's /analysis/{project_id} endpoint reads this file.
-        # Without it, the QC 12-dim, Track DNA, Energy Map, and Verdict won't render.
+        # ── Copy parent's full analysis.json so frontend can render Track DNA ──
+        # The parent's analysis.json has the full profiler format (tempo, integrated_lufs,
+        # energy_curve[], sections[], etc.) that the frontend expects. The in-memory
+        # `analysis` dict is a stripped-down version that would crash the UI.
         analysis_out = project_dir / "analysis.json"
         try:
-            import json as json_mod
-            analysis_out.write_text(json_mod.dumps(analysis, indent=2, default=str))
-            _log(job, "📊 Analysis saved for UI", "info")
+            import shutil as _shutil
+            parent_project_dir = settings.projects_dir / parent.get("project_id", parent_id)
+            parent_analysis = parent_project_dir / "analysis.json"
+            if parent_analysis.exists():
+                _shutil.copy2(str(parent_analysis), str(analysis_out))
+                _log(job, "📊 Analysis inherited from parent for UI", "info")
+            else:
+                # Fallback: save whatever we have
+                import json as json_mod
+                analysis_out.write_text(json_mod.dumps(analysis, indent=2, default=str))
+                _log(job, "📊 Analysis saved (minimal — parent analysis.json not found)", "warning")
         except Exception as e:
             _log(job, f"⚠️ Could not save analysis.json: {e}", "warning")
 

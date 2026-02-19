@@ -2176,13 +2176,13 @@ export default function ReconstructPage() {
                             <CardContent>
                                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
                                     {[
-                                        { label: "BPM", value: analysis.tempo.toFixed(1), color: "text-amber-400" },
-                                        { label: "Key", value: `${analysis.key} ${analysis.scale}`, color: "text-emerald-400" },
-                                        { label: "Duration", value: formatTime(analysis.duration), color: "text-purple-400" },
-                                        { label: "LUFS", value: `${analysis.integrated_lufs.toFixed(1)}`, color: "text-cyan-400" },
-                                        { label: "Peak", value: `${analysis.true_peak_dbfs.toFixed(1)} dBFS`, color: "text-orange-400" },
-                                        { label: "Dyn Range", value: `${analysis.dynamic_range_db.toFixed(1)} dB`, color: "text-pink-400" },
-                                        { label: "Sections", value: `${analysis.sections.length}`, color: "text-zinc-300" },
+                                        { label: "BPM", value: (analysis.tempo ?? analysis.bpm ?? 0).toFixed?.(1) ?? "—", color: "text-amber-400" },
+                                        { label: "Key", value: `${analysis.key ?? "—"} ${analysis.scale ?? ""}`, color: "text-emerald-400" },
+                                        { label: "Duration", value: formatTime(analysis.duration ?? 0), color: "text-purple-400" },
+                                        { label: "LUFS", value: analysis.integrated_lufs != null ? `${analysis.integrated_lufs.toFixed(1)}` : "—", color: "text-cyan-400" },
+                                        { label: "Peak", value: analysis.true_peak_dbfs != null ? `${analysis.true_peak_dbfs.toFixed(1)} dBFS` : "—", color: "text-orange-400" },
+                                        { label: "Dyn Range", value: analysis.dynamic_range_db != null ? `${analysis.dynamic_range_db.toFixed(1)} dB` : "—", color: "text-pink-400" },
+                                        { label: "Sections", value: `${(analysis.sections ?? []).length || analysis.sections_detected || 0}`, color: "text-zinc-300" },
                                     ].map((item) => (
                                         <div key={item.label} className="text-center p-3 rounded-lg bg-zinc-800/50">
                                             <div className={`text-lg font-bold ${item.color}`}>{item.value}</div>
@@ -2194,17 +2194,17 @@ export default function ReconstructPage() {
                         </Card>
 
                         {/* Energy Curve */}
-                        {analysis.energy_curve.length > 0 && (
+                        {(analysis.energy_curve ?? []).length > 0 && (
                             <Card className="bg-zinc-900/50 border-zinc-800">
                                 <CardHeader>
                                     <CardTitle className="text-lg">📊 Energy Map</CardTitle>
                                     <CardDescription>
-                                        Per-bar RMS energy — auto-detected from audio ({analysis.energy_curve.length} bars)
+                                        Per-bar RMS energy — auto-detected from audio ({(analysis.energy_curve ?? []).length} bars)
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent>
                                     <div className="flex items-end gap-[1px] h-32">
-                                        {analysis.energy_curve.map((point, i) => (
+                                        {(analysis.energy_curve ?? []).map((point, i) => (
                                             <div
                                                 key={i}
                                                 className="flex-1 cursor-pointer group"
@@ -2219,8 +2219,8 @@ export default function ReconstructPage() {
                                     </div>
                                     <div className="flex justify-between mt-2 text-[10px] text-zinc-600">
                                         <span>Bar 0</span>
-                                        <span>Bar {Math.floor(analysis.energy_curve.length / 2)}</span>
-                                        <span>Bar {analysis.energy_curve.length}</span>
+                                        <span>Bar {Math.floor((analysis.energy_curve ?? []).length / 2)}</span>
+                                        <span>Bar {(analysis.energy_curve ?? []).length}</span>
                                     </div>
                                 </CardContent>
                             </Card>
@@ -2231,12 +2231,12 @@ export default function ReconstructPage() {
                             <CardHeader>
                                 <CardTitle className="text-lg">🎼 Sections</CardTitle>
                                 <CardDescription>
-                                    {analysis.sections.length} sections — auto-detected from energy analysis
+                                    {(analysis.sections ?? []).length} sections — auto-detected from energy analysis
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                    {analysis.sections.map((section, i) => (
+                                    {(analysis.sections ?? []).map((section, i) => (
                                         <div
                                             key={i}
                                             className={`rounded-lg border p-4 cursor-pointer transition-all ${selectedSection === section.name + i
