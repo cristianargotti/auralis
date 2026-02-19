@@ -160,15 +160,17 @@ interface ReconstructJob {
 }
 
 interface AnalysisData {
-    tempo: number;
-    key: string;
-    scale: string;
-    duration: number;
-    integrated_lufs: number;
-    true_peak_dbfs: number;
-    dynamic_range_db: number;
-    band_energy_profile: Record<string, number>;
-    sections: {
+    tempo?: number;
+    bpm?: number;
+    key?: string;
+    scale?: string;
+    duration?: number;
+    integrated_lufs?: number;
+    true_peak_dbfs?: number;
+    dynamic_range_db?: number;
+    band_energy_profile?: Record<string, number>;
+    sections_detected?: number;
+    sections?: {
         name: string;
         start_time: number;
         end_time: number;
@@ -178,7 +180,8 @@ interface AnalysisData {
         element_count: number;
         characteristics: string[];
     }[];
-    energy_curve: { bar: number; rms_db: number }[];
+    energy_curve?: { bar: number; rms_db: number }[];
+    [key: string]: any;
 }
 
 /* ── Pipeline stages ─────────────────────────────────── */
