@@ -2176,7 +2176,7 @@ export default function ReconstructPage() {
                             <CardContent>
                                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
                                     {[
-                                        { label: "BPM", value: (analysis.tempo ?? analysis.bpm ?? 0).toFixed?.(1) ?? "—", color: "text-amber-400" },
+                                        { label: "BPM", value: Number(analysis.tempo ?? analysis.bpm ?? 0).toFixed(1), color: "text-amber-400" },
                                         { label: "Key", value: `${analysis.key ?? "—"} ${analysis.scale ?? ""}`, color: "text-emerald-400" },
                                         { label: "Duration", value: formatTime(analysis.duration ?? 0), color: "text-purple-400" },
                                         { label: "LUFS", value: analysis.integrated_lufs != null ? `${analysis.integrated_lufs.toFixed(1)}` : "—", color: "text-cyan-400" },
