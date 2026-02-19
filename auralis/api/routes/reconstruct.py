@@ -2598,64 +2598,91 @@ async def _run_improvement(
 
         from auralis.brain.gemini_client import generate as gemini_generate
 
-        improvement_prompt = f"""You are AURALIS AI Producer. A user has completed a track and wants specific improvements.
+        improvement_prompt = f"""You are AURALIS AI Producer — an expert music producer with deep knowledge of sound design, mixing, and arrangement.
 
 ## Original Track Analysis
 {json.dumps(track_context, indent=2, default=str)}
 
-## User's Feedback
+## User's Feedback / Approved Improvements
 "{feedback}"
 
 ## Your Task
-Analyze the track data and the user's feedback. Generate a COMPLETE improvement plan.
-You must decide:
-1. Which sections of the track need changes (by bar range)
-2. What specific modifications to make (effects, volume, EQ, arrangement)
-3. How to re-mix for the best result
+Create a precise improvement plan. For EACH change, you must choose the exact operation and parameters.
+You are the expert — decide the right values based on the track's BPM, genre, energy, and musical context.
 
-Respond with this exact JSON structure:
+## Available Operations
+
+### Effects (type: "effect")
+Each effect has specific params YOU must set based on musical context:
+
+| effect_name | params | description |
+|---|---|---|
+| `shimmer_reverb` | `decay` (1-8s), `wet_mix` (0-1) | Octave-shifted ethereal reverb — breakdowns, intros |
+| `reverb` | `room_size` (0-1), `wet_mix` (0-1), `damping` (0-1) | Standard reverb — space and depth |
+| `delay` | `delay_time` (ms, e.g. 250-750), `feedback` (0-0.9), `wet_mix` (0-1) | Echo/repeat — rhythmic elements |
+| `sidechain` | `depth` (0-1) | Pumping effect synced to BPM — bass, pads |
+| `filter_sweep` | `start_hz` (20-20000), `end_hz` (20-20000), `filter_type` ("highpass"/"lowpass") | Automated filter — builds, drops |
+| `filter` | `cutoff` (Hz), `filter_type` ("lowpass"/"highpass"), `wet_mix` (0-1) | Static EQ filter |
+| `distortion` | `drive` (1-10), `type` ("soft_clip"/"tube"/"hard_clip"), `wet_mix` (0-1) | Saturation/warmth |
+| `compressor` | `threshold` (-40 to 0 dB), `ratio` (1-20) | Dynamics control — punch, glue |
+| `chorus` | `rate_hz` (0.1-5), `depth_ms` (1-10), `wet_mix` (0-1) | Ensemble/thicken |
+| `stereo_width` | `width` (0-2, where 1=unchanged, >1=wider, <1=narrower) | Spatial width |
+| `tape_stop` | `duration_ms` (100-2000) | Tape deceleration — transitions |
+| `pitch_riser` | `semitones` (1-24) | Gradual pitch rise — tension builds |
+| `ring_mod` | `freq_hz` (50-2000), `wet_mix` (0-1) | Metallic/robotic textures |
+
+### Volume (type: "volume")
+params: `db` (e.g. -6.0 to +6.0)
+
+### Arrangement (type: "arrangement")
+params: `action` — one of: "mute", "fade_in", "fade_out"
+
+### Pitch Shift (type: "pitch_shift")
+params: `semitones` (-12 to +12)
+
+### Generate New Audio (type: "generate")
+For adding NEW elements that don't exist in the track (percussion, textures, etc.)
+params: `prompt` (text description for AI audio generation, be specific about style/BPM/tone), `volume` (0-1)
+
+### Texture (type: "texture")
+For atmospheric/ambient layers. params: `prompt` (descriptive), `volume` (0-1)
+
+## Response JSON
 {{
-  "understanding": "Your interpretation of what the user wants (1-2 sentences)",
-  "plan_title": "Short name for this improvement (e.g. 'Atmospheric Intro Enhancement')",
+  "understanding": "Your interpretation of what to improve",
+  "plan_title": "Short name for this improvement plan",
   "changes": [
     {{
-      "section": "intro | verse | chorus | drop | breakdown | outro | bars_N_to_M",
+      "section": "intro | verse | chorus | drop | breakdown | outro | bridge",
       "bar_start": 0,
       "bar_end": 16,
       "stems_affected": ["drums", "bass", "vocals", "other"],
       "modifications": [
         {{
-          "type": "effect | volume | eq | arrangement | style",
-          "description": "What to do (e.g. 'Add shimmer reverb with long tail')",
-          "params": {{
-            "effect_name": "reverb",
-            "wet_mix": 0.4,
-            "decay": 3.5
-          }}
+          "type": "<operation type from above>",
+          "description": "What this does musically",
+          "params": {{ "<params as specified per operation>" }}
         }}
       ],
-      "reasoning": "Why this change addresses the user's feedback"
+      "reasoning": "Why this change improves the track"
     }}
   ],
   "mixing_adjustments": {{
     "overall_description": "How the final mix should change",
-    "stem_levels": {{
-      "drums": 0.0,
-      "bass": 0.0,
-      "vocals": 0.0,
-      "other": 0.0
-    }},
+    "stem_levels": {{ "drums": 0.0, "bass": 0.0, "vocals": 0.0, "other": 0.0 }},
     "master_processing": "Any changes to the master chain"
   }},
-  "expected_result": "What the user should hear differently after these changes"
+  "expected_result": "What the user should hear differently"
 }}
 
-CRITICAL: The ONLY valid stem names are: "drums", "bass", "vocals", "other".
-- "other" contains ALL melodic/harmonic elements: synths, pads, keys, guitars, leads, FX, etc.
-- "vocals" contains all vocal content.
-Do NOT use names like "synths", "chords", "melody", "keys" — map them to "other".
-
-Be creative, musical, and precise. Think like a professional producer who understands the user's vision."""
+## CRITICAL RULES
+- The ONLY valid stem names are: "drums", "bass", "vocals", "other"
+- "other" = ALL melodic/harmonic: synths, pads, keys, guitars, leads, FX
+- YOU decide the exact parameter values — choose them based on BPM ({analysis.get('bpm', 120)}), genre, energy level
+- Be precise: if the section is a breakdown, use longer reverb decay. If it's a drop, use shorter, punchier settings
+- Don't use generic values — think about what a top producer would set for THIS specific track
+- For "generate" type: write the prompt as if describing the sound to a musician (e.g. "Tribal woodblock pattern, syncopated, {analysis.get('bpm', 120)}bpm, dry")
+"""
 
         ai_plan = gemini_generate(
             prompt=improvement_prompt,
@@ -2711,15 +2738,126 @@ Be creative, musical, and precise. Think like a professional producer who unders
                 impl_match = re.search(r'Implementation:\s*(.+?)(?:\(bars|\[stems|$)', item, re.DOTALL)
                 impl = impl_match.group(1).strip().rstrip('—. ') if impl_match else ""
 
+                # ── Intelligently determine mod_type + effect from description ──
+                def _classify_modification(title: str, impl: str) -> dict:
+                    """Analyze description to determine the right mod_type, effect, and params."""
+                    text = f"{title} {impl}".lower()
+
+                    # Priority 1: Generation / replacement (needs Replicate)
+                    gen_keywords = ["add", "create", "introduce", "generate", "layer", "woodblock",
+                                    "percussion", "new element", "new layer", "replace with"]
+                    if any(kw in text for kw in gen_keywords) and any(
+                        w in text for w in ["sound", "element", "layer", "beat", "rhythm", "pattern", "sample"]
+                    ):
+                        prompt = f"{title}. {impl}".strip(". ")
+                        return {"type": "generate", "description": prompt,
+                                "params": {"prompt": prompt, "volume": 0.5}}
+
+                    # Priority 2: Texture / atmospheric
+                    if any(kw in text for kw in ["texture", "atmosphere", "ambient", "granular",
+                                                   "dissolve", "morph", "evolving"]):
+                        prompt = f"{title}. {impl}".strip(". ")
+                        return {"type": "texture", "description": prompt,
+                                "params": {"prompt": prompt, "volume": 0.3}}
+
+                    # Priority 3: Pitch shift / transpose
+                    if any(kw in text for kw in ["transpose", "pitch shift", "pitch down",
+                                                   "pitch up", "semitone", "octave"]):
+                        # Try to extract semitones from text
+                        semis = 0
+                        semi_match = re.search(r'(\d+)\s*(?:semi|st\b)', text)
+                        if semi_match:
+                            semis = int(semi_match.group(1))
+                        elif "octave" in text:
+                            semis = 12
+                        if "down" in text or "lower" in text:
+                            semis = -abs(semis) if semis else -2
+                        elif semis == 0:
+                            semis = 2  # default up
+                        return {"type": "pitch_shift", "description": f"{title}: {impl}",
+                                "params": {"semitones": semis}}
+
+                    # Priority 4: Volume / levels
+                    if any(kw in text for kw in ["volume", "louder", "quieter", "boost", "reduce",
+                                                   "attenuate", "gain", "level"]):
+                        db = 3.0
+                        if any(w in text for w in ["reduce", "quieter", "lower", "attenuate", "cut", "less"]):
+                            db = -3.0
+                        db_match = re.search(r'(\d+)\s*db', text)
+                        if db_match:
+                            db = float(db_match.group(1))
+                            if any(w in text for w in ["reduce", "lower", "cut", "less"]):
+                                db = -db
+                        return {"type": "volume", "description": f"{title}: {impl}",
+                                "params": {"db": db}}
+
+                    # Priority 5: Arrangement (mute, fade, silence)
+                    if any(kw in text for kw in ["mute", "silence", "remove", "strip", "vacuum"]):
+                        return {"type": "arrangement", "description": f"{title}: {impl}",
+                                "params": {"action": "mute"}}
+                    if "fade" in text and "in" in text:
+                        return {"type": "arrangement", "description": f"{title}: {impl}",
+                                "params": {"action": "fade_in"}}
+                    if "fade" in text and "out" in text:
+                        return {"type": "arrangement", "description": f"{title}: {impl}",
+                                "params": {"action": "fade_out"}}
+
+                    # Priority 6: Specific effects (score-based, not first-match)
+                    effect_scores = {}
+                    effect_kw = {
+                        "shimmer_reverb": ["shimmer", "ethereal reverb", "cathedral", "lush reverb"],
+                        "reverb": ["reverb", "room", "space", "hall", "tail"],
+                        "delay": ["delay", "echo", "repeat", "ping pong"],
+                        "sidechain": ["sidechain", "pump", "ducking", "breathing"],
+                        "filter_sweep": ["sweep", "filter sweep", "rising filter", "opening"],
+                        "filter": ["filter", "eq", "low-pass", "high-pass", "cutoff", "low pass", "high pass"],
+                        "distortion": ["saturation", "distortion", "drive", "overdrive", "grit", "warmth", "tape"],
+                        "chorus": ["chorus", "ensemble", "detune", "thicken"],
+                        "compressor": ["compress", "dynamics", "punch", "glue", "tighter"],
+                        "stereo_width": ["stereo", "width", "widen", "wider", "narrow", "spacious", "panorama"],
+                        "tape_stop": ["tape stop", "slowdown", "decelerate"],
+                        "pitch_riser": ["riser", "tension", "build", "rising pitch"],
+                        "ring_mod": ["ring mod", "metallic", "robotic"],
+                    }
+                    for fx, keywords in effect_kw.items():
+                        score = sum(2 if kw in text else 0 for kw in keywords)
+                        if score > 0:
+                            effect_scores[fx] = score
+
+                    if effect_scores:
+                        best_fx = max(effect_scores, key=effect_scores.get)
+                        fx_params = {"effect_name": best_fx, "mix": 0.5}
+                        # Add smart defaults per effect
+                        if best_fx == "shimmer_reverb":
+                            fx_params["decay"] = 3.0
+                        elif best_fx == "reverb":
+                            fx_params["room_size"] = 0.7
+                        elif best_fx == "delay":
+                            fx_params["delay_time"] = 375
+                            fx_params["feedback"] = 0.4
+                        elif best_fx == "sidechain":
+                            fx_params["depth"] = 0.8
+                        elif best_fx == "distortion":
+                            fx_params["drive"] = 3.0
+                        elif best_fx == "stereo_width":
+                            fx_params["width"] = 1.5
+                        elif best_fx == "compressor":
+                            fx_params["threshold"] = -18
+                            fx_params["ratio"] = 4.0
+                        return {"type": "effect", "description": f"{title}: {impl}",
+                                "params": fx_params}
+
+                    # Default: general enhancement with description for _infer_effect
+                    return {"type": "effect", "description": f"{title}: {impl}",
+                            "params": {"effect_name": "general", "mix": 0.5}}
+
                 parsed_changes.append({
                     "section": f"bars_{bar_start}_to_{bar_end}",
                     "bar_start": bar_start,
                     "bar_end": bar_end,
                     "modifications": [{
                         "stem": s,
-                        "type": "effect",
-                        "description": f"{title}: {impl}" if impl else title,
-                        "params": {"effect": "general", "mix": 0.6},
+                        **_classify_modification(title, impl),
                     } for s in (stems or ["other"])],
                 })
 
@@ -2811,17 +2949,98 @@ Be creative, musical, and precise. Think like a professional producer who unders
         stems_modified = 0
         stem_files = list(child_stems.glob("*.wav")) if child_stems.exists() else []
 
+        # ── Import the full AURALIS hands engine ──
+        from auralis.hands.effects import (
+            apply_reverb, ReverbConfig,
+            apply_delay, DelayConfig,
+            apply_distortion, DistortionConfig,
+            apply_compressor, CompressorConfig,
+            apply_chorus, ChorusConfig,
+            apply_sidechain, SidechainConfig,
+            apply_shimmer_reverb,
+            apply_filter_sweep,
+            apply_stereo_width,
+            apply_tape_stop,
+            apply_pitch_riser,
+            apply_ring_mod,
+            apply_eq, EQBand,
+        )
+
+        # Replicate client for audio generation (lazy-loaded)
+        stable_client = None
+        def _get_stable_client():
+            nonlocal stable_client
+            if stable_client is None:
+                try:
+                    from auralis.hands.stable_audio import StableAudioClient
+                    stable_client = StableAudioClient()
+                except Exception as e:
+                    _log(job, f"  ⚠️ Replicate not available: {e}", "warning")
+            return stable_client
+
+        def _infer_effect_from_description(desc: str) -> str:
+            """Parse a description string to determine which effect to apply."""
+            desc_lower = desc.lower()
+            if "shimmer" in desc_lower and "reverb" in desc_lower:
+                return "shimmer_reverb"
+            if "reverb" in desc_lower:
+                return "reverb"
+            if "delay" in desc_lower or "echo" in desc_lower:
+                return "delay"
+            if "filter" in desc_lower or "eq" in desc_lower or "low-pass" in desc_lower or "high-pass" in desc_lower:
+                return "filter"
+            if "saturation" in desc_lower or "distortion" in desc_lower or "drive" in desc_lower:
+                return "distortion"
+            if "sidechain" in desc_lower or "pump" in desc_lower:
+                return "sidechain"
+            if "chorus" in desc_lower:
+                return "chorus"
+            if "compress" in desc_lower:
+                return "compressor"
+            if "stereo" in desc_lower or "width" in desc_lower or "widen" in desc_lower:
+                return "stereo_width"
+            if "tape" in desc_lower and "stop" in desc_lower:
+                return "tape_stop"
+            if "riser" in desc_lower or "pitch" in desc_lower and "rise" in desc_lower:
+                return "pitch_riser"
+            if "ring" in desc_lower and "mod" in desc_lower:
+                return "ring_mod"
+            if "sweep" in desc_lower:
+                return "filter_sweep"
+            if "mute" in desc_lower or "silence" in desc_lower or "cut" in desc_lower or "vacuum" in desc_lower:
+                return "mute"
+            if "fade" in desc_lower and "in" in desc_lower:
+                return "fade_in"
+            if "fade" in desc_lower and "out" in desc_lower:
+                return "fade_out"
+            if "granular" in desc_lower or "dissolve" in desc_lower or "texture" in desc_lower:
+                return "texture"
+            if "transpose" in desc_lower or "pitch" in desc_lower:
+                return "pitch_shift"
+            return "general"
+
         # Apply changes from the AI plan
         for change_idx, change in enumerate(changes):
             bar_start = change.get("bar_start", 0)
             bar_end = change.get("bar_end", 8)
-            stems_affected = change.get("stems_affected", [])
+            stems_affected_list = change.get("stems_affected", [])
             modifications = change.get("modifications", [])
             section_name = change.get("section", "?")
 
             _log(job, f"🔧 Processing: {section_name} (bars {bar_start}-{bar_end})", "info")
 
-            for stem_name_raw in stems_affected:
+            # Build list of (stem_name, modifications) to process
+            stem_mod_pairs = []
+            if stems_affected_list:
+                # Gemini format: stems_affected is a list, modifications are shared
+                for s in stems_affected_list:
+                    stem_mod_pairs.append((s, modifications))
+            elif modifications:
+                # Feedback parser format: each modification has its own "stem"
+                for mod in modifications:
+                    stem_mod_pairs.append((mod.get("stem", "other"), [mod]))
+
+            for stem_name_raw, mods_for_stem in stem_mod_pairs:
                 # Normalize Gemini's stem names to actual Demucs file names
                 _STEM_MAP = {
                     "drums": "drums", "drum": "drums", "percussion": "drums", "kick": "drums", "hats": "drums",
@@ -2851,66 +3070,170 @@ Be creative, musical, and precise. Think like a professional producer who unders
                     if start_sample >= y.shape[-1]:
                         continue
 
-                    # Apply each modification from the AI plan
-                    for mod in modifications:
+                    # Apply each modification using the FULL engine
+                    for mod in mods_for_stem:
                         mod_type = mod.get("type", "")
                         params = mod.get("params", {})
+                        desc = mod.get("description", "")
+
+                        # Resolve effect name: explicit from Gemini, or inferred from description
+                        effect_name = params.get("effect_name", params.get("effect", ""))
+                        if not effect_name or effect_name == "general":
+                            effect_name = _infer_effect_from_description(desc)
 
                         if mod_type == "effect":
-                            effect_name = params.get("effect_name", "")
-                            wet_mix = float(params.get("wet_mix", 0.3))
+                            wet_mix = float(params.get("wet_mix", params.get("mix", 0.5)))
 
-                            if "reverb" in effect_name.lower():
-                                # Apply reverb to the section
-                                decay = float(params.get("decay", 2.0))
-                                ir_len = int(decay * sr)
-                                impulse = np.exp(-3.0 * np.linspace(0, 1, ir_len))
-                                impulse = impulse / (np.sum(impulse) + 1e-10)
-                                for ch in range(y.shape[0]):
-                                    segment = y[ch, start_sample:end_sample]
-                                    reverbed = np.convolve(segment, impulse, mode="full")[:len(segment)]
-                                    y[ch, start_sample:end_sample] = (
-                                        segment * (1 - wet_mix) + reverbed * wet_mix
-                                    )
-                                _log(job, f"  ✨ Reverb → {stem_name} (decay={decay}s, wet={wet_mix})", "info")
+                            # Extract segment for processing
+                            segment = y[:, start_sample:end_sample].copy()
+                            processed = None
 
-                            elif "delay" in effect_name.lower():
-                                delay_time = float(params.get("delay_time", 0.25))
-                                delay_feedback = float(params.get("feedback", 0.3))
-                                delay_samples = int(delay_time * sr)
-                                for ch in range(y.shape[0]):
-                                    segment = y[ch, start_sample:end_sample].copy()
-                                    delayed = np.zeros_like(segment)
-                                    if delay_samples < len(segment):
-                                        delayed[delay_samples:] = segment[:-delay_samples] * delay_feedback
-                                    y[ch, start_sample:end_sample] = segment + delayed * wet_mix
-                                _log(job, f"  🔁 Delay → {stem_name} (time={delay_time}s)", "info")
-
-                            elif "filter" in effect_name.lower() or "eq" in effect_name.lower():
-                                # Simple low/high pass
-                                from scipy import signal as scipy_signal
-                                cutoff = float(params.get("cutoff", 2000))
-                                filter_type = params.get("filter_type", "lowpass")
-                                try:
-                                    nyq = sr / 2
-                                    norm_cutoff = min(cutoff / nyq, 0.99)
-                                    b, a = scipy_signal.butter(4, norm_cutoff, btype=filter_type)
-                                    for ch in range(y.shape[0]):
-                                        segment = y[ch, start_sample:end_sample]
-                                        filtered = scipy_signal.filtfilt(b, a, segment)
-                                        y[ch, start_sample:end_sample] = (
-                                            segment * (1 - wet_mix) + filtered * wet_mix
+                            try:
+                                if effect_name == "shimmer_reverb":
+                                    decay = float(params.get("decay", 3.0))
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_shimmer_reverb(
+                                            segment[ch].astype(np.float64),
+                                            decay_s=decay, wet=wet_mix, sr=sr,
                                         )
-                                    _log(job, f"  🎛️ {filter_type} filter → {stem_name} (cutoff={cutoff}Hz)", "info")
-                                except Exception:
-                                    pass
+                                    processed = segment
+                                    _log(job, f"  ✨ Shimmer Reverb → {stem_name} (decay={decay}s)", "info")
 
-                            elif "distortion" in effect_name.lower() or "saturation" in effect_name.lower():
-                                drive = float(params.get("drive", 2.0))
-                                for ch in range(y.shape[0]):
-                                    segment = y[ch, start_sample:end_sample]
-                                    y[ch, start_sample:end_sample] = np.tanh(segment * drive) / drive
-                                _log(job, f"  🔥 Saturation → {stem_name} (drive={drive}x)", "info")
+                                elif effect_name == "reverb":
+                                    room = float(params.get("room_size", 0.7))
+                                    cfg = ReverbConfig(room_size=room, wet=wet_mix, damping=0.5)
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_reverb(segment[ch].astype(np.float64), cfg, sr=sr)
+                                    processed = segment
+                                    _log(job, f"  ✨ Reverb → {stem_name} (room={room}, wet={wet_mix})", "info")
+
+                                elif effect_name == "delay":
+                                    time_ms = float(params.get("delay_time", params.get("time_ms", 375))) * 1000 if params.get("delay_time", 0) < 10 else float(params.get("delay_time", 375))
+                                    fb = float(params.get("feedback", 0.4))
+                                    ping_pong = "ping" in desc.lower()
+                                    cfg = DelayConfig(time_ms=time_ms, feedback=fb, wet=wet_mix, ping_pong=ping_pong)
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_delay(segment[ch].astype(np.float64), cfg, sr=sr)
+                                    processed = segment
+                                    _log(job, f"  🔁 Delay → {stem_name} (time={time_ms:.0f}ms, pp={ping_pong})", "info")
+
+                                elif effect_name == "filter" or effect_name == "filter_sweep":
+                                    if "sweep" in desc.lower() or "automate" in desc.lower():
+                                        start_hz = float(params.get("start_hz", params.get("cutoff", 200)))
+                                        end_hz = float(params.get("end_hz", 8000))
+                                        f_type = "highpass" if "high" in desc.lower() else "lowpass"
+                                        for ch in range(segment.shape[0]):
+                                            segment[ch] = apply_filter_sweep(
+                                                segment[ch].astype(np.float64),
+                                                filter_type=f_type,
+                                                start_hz=start_hz, end_hz=end_hz,
+                                                curve_shape="exponential", sr=sr,
+                                            )
+                                        processed = segment
+                                        _log(job, f"  🎛️ Filter Sweep → {stem_name} ({start_hz}→{end_hz}Hz)", "info")
+                                    else:
+                                        from scipy import signal as scipy_signal
+                                        cutoff = float(params.get("cutoff", 2000))
+                                        filter_type = params.get("filter_type", "lowpass")
+                                        nyq = sr / 2
+                                        norm_cutoff = min(cutoff / nyq, 0.99)
+                                        b, a = scipy_signal.butter(4, norm_cutoff, btype=filter_type)
+                                        for ch in range(segment.shape[0]):
+                                            segment[ch] = scipy_signal.filtfilt(b, a, segment[ch])
+                                        processed = segment * wet_mix + y[:, start_sample:end_sample] * (1 - wet_mix)
+                                        _log(job, f"  🎛️ {filter_type} → {stem_name} ({cutoff}Hz)", "info")
+
+                                elif effect_name == "distortion":
+                                    drive = float(params.get("drive", 5.0))
+                                    d_type = "tube" if "tube" in desc.lower() or "tape" in desc.lower() else "soft_clip"
+                                    cfg = DistortionConfig(drive=drive, type=d_type, mix=wet_mix)
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_distortion(segment[ch].astype(np.float64), cfg)
+                                    processed = segment
+                                    _log(job, f"  🔥 Saturation → {stem_name} (drive={drive}, type={d_type})", "info")
+
+                                elif effect_name == "sidechain":
+                                    depth = float(params.get("depth", 0.8))
+                                    cfg = SidechainConfig(depth=depth)
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_sidechain(segment[ch].astype(np.float64), cfg, sr=sr, bpm=bpm)
+                                    processed = segment
+                                    _log(job, f"  💓 Sidechain → {stem_name} (depth={depth})", "info")
+
+                                elif effect_name == "chorus":
+                                    cfg = ChorusConfig(rate_hz=1.5, depth_ms=3.0, mix=wet_mix)
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_chorus(segment[ch].astype(np.float64), cfg, sr=sr)
+                                    processed = segment
+                                    _log(job, f"  🌊 Chorus → {stem_name}", "info")
+
+                                elif effect_name == "compressor":
+                                    threshold = float(params.get("threshold", -20))
+                                    ratio = float(params.get("ratio", 4.0))
+                                    cfg = CompressorConfig(threshold_db=threshold, ratio=ratio)
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_compressor(segment[ch].astype(np.float64), cfg, sr=sr)
+                                    processed = segment
+                                    _log(job, f"  🗜️ Compressor → {stem_name} (thresh={threshold}dB)", "info")
+
+                                elif effect_name == "stereo_width":
+                                    width = float(params.get("width", 1.5))
+                                    if segment.shape[0] >= 2:
+                                        stereo = apply_stereo_width(segment.astype(np.float64), width=width)
+                                        processed = stereo
+                                    _log(job, f"  🔊 Stereo Width → {stem_name} (width={width})", "info")
+
+                                elif effect_name == "tape_stop":
+                                    dur_ms = float(params.get("duration_ms", 500))
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_tape_stop(segment[ch].astype(np.float64), duration_ms=dur_ms, sr=sr)
+                                    processed = segment
+                                    _log(job, f"  ⏹️ Tape Stop → {stem_name} ({dur_ms}ms)", "info")
+
+                                elif effect_name == "pitch_riser":
+                                    semis = float(params.get("semitones", 12))
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_pitch_riser(segment[ch].astype(np.float64), semitones=semis, sr=sr)
+                                    processed = segment
+                                    _log(job, f"  🚀 Pitch Riser → {stem_name} (+{semis} st)", "info")
+
+                                elif effect_name == "ring_mod":
+                                    freq = float(params.get("freq_hz", 440))
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_ring_mod(segment[ch].astype(np.float64), freq_hz=freq, wet=wet_mix, sr=sr)
+                                    processed = segment
+                                    _log(job, f"  🔔 Ring Mod → {stem_name} ({freq}Hz)", "info")
+
+                                elif effect_name == "mute":
+                                    processed = np.zeros_like(segment)
+                                    _log(job, f"  🔇 Muted {stem_name} bars {bar_start}-{bar_end}", "info")
+
+                                elif effect_name == "fade_in":
+                                    length = segment.shape[-1]
+                                    fade = np.linspace(0, 1, length)
+                                    processed = segment * fade
+                                    _log(job, f"  📈 Fade-in → {stem_name}", "info")
+
+                                elif effect_name == "fade_out":
+                                    length = segment.shape[-1]
+                                    fade = np.linspace(1, 0, length)
+                                    processed = segment * fade
+                                    _log(job, f"  📉 Fade-out → {stem_name}", "info")
+
+                                else:
+                                    # Fallback: apply general enhancement (subtle saturation + compression)
+                                    cfg = DistortionConfig(drive=1.5, type="soft_clip", mix=0.3)
+                                    for ch in range(segment.shape[0]):
+                                        segment[ch] = apply_distortion(segment[ch].astype(np.float64), cfg)
+                                    processed = segment
+                                    _log(job, f"  ⚡ General enhancement → {stem_name} ({effect_name})", "info")
+
+                                # Write processed segment back
+                                if processed is not None:
+                                    y[:, start_sample:end_sample] = processed
+
+                            except Exception as fx_err:
+                                _log(job, f"  ⚠️ Effect '{effect_name}' failed: {fx_err}, skipping", "warning")
 
                         elif mod_type == "volume":
                             db_change = float(params.get("db", 0))
@@ -2934,6 +3257,65 @@ Be creative, musical, and precise. Think like a professional producer who unders
                                 fade = np.linspace(1, 0, length)
                                 y[:, start_sample:end_sample] *= fade
                                 _log(job, f"  📉 Fade-out → {stem_name}", "info")
+
+                        elif mod_type == "pitch_shift":
+                            semitones = float(params.get("semitones", 0))
+                            if semitones != 0:
+                                for ch in range(y.shape[0]):
+                                    y[ch, start_sample:end_sample] = librosa.effects.pitch_shift(
+                                        y[ch, start_sample:end_sample], sr=sr, n_steps=semitones,
+                                    )
+                                _log(job, f"  🎵 Pitch Shift → {stem_name} ({'+' if semitones > 0 else ''}{semitones} st)", "info")
+
+                        elif mod_type == "generate":
+                            # Generate new audio layer via Replicate
+                            client = _get_stable_client()
+                            if client:
+                                gen_prompt = params.get("prompt", desc)
+                                duration_s = (bar_end - bar_start) * bar_duration_s
+                                gen_dir = project_dir / "generated"
+                                gen_dir.mkdir(exist_ok=True)
+                                _log(job, f"  🎨 Generating via Replicate: '{gen_prompt[:50]}...'", "info")
+                                gen_path = client.generate_loop(gen_prompt, bpm, duration_s, gen_dir)
+                                if gen_path and gen_path.exists():
+                                    gen_audio, _ = librosa.load(str(gen_path), sr=sr, mono=False)
+                                    if gen_audio.ndim == 1:
+                                        gen_audio = np.stack([gen_audio, gen_audio])
+                                    # Trim/pad to fit the section
+                                    section_len = end_sample - start_sample
+                                    if gen_audio.shape[-1] > section_len:
+                                        gen_audio = gen_audio[:, :section_len]
+                                    elif gen_audio.shape[-1] < section_len:
+                                        gen_audio = np.pad(gen_audio, ((0, 0), (0, section_len - gen_audio.shape[-1])))
+                                    # Mix into stem at specified volume
+                                    mix_vol = float(params.get("volume", 0.5))
+                                    y[:, start_sample:end_sample] += gen_audio * mix_vol
+                                    _log(job, f"  ✅ Generated layer mixed into {stem_name}", "success")
+                                else:
+                                    _log(job, f"  ⚠️ Generation failed for '{gen_prompt[:30]}'", "warning")
+
+                        elif mod_type == "texture":
+                            # Generate atmospheric texture via Replicate
+                            client = _get_stable_client()
+                            if client:
+                                tex_prompt = params.get("prompt", f"atmospheric {stem_name} texture, {bpm}bpm")
+                                duration_s = (bar_end - bar_start) * bar_duration_s
+                                gen_dir = project_dir / "generated"
+                                gen_dir.mkdir(exist_ok=True)
+                                _log(job, f"  🌫️ Generating texture: '{tex_prompt[:50]}...'", "info")
+                                gen_path = client.generate_loop(tex_prompt, bpm, duration_s, gen_dir)
+                                if gen_path and gen_path.exists():
+                                    tex_audio, _ = librosa.load(str(gen_path), sr=sr, mono=False)
+                                    if tex_audio.ndim == 1:
+                                        tex_audio = np.stack([tex_audio, tex_audio])
+                                    section_len = end_sample - start_sample
+                                    if tex_audio.shape[-1] > section_len:
+                                        tex_audio = tex_audio[:, :section_len]
+                                    elif tex_audio.shape[-1] < section_len:
+                                        tex_audio = np.pad(tex_audio, ((0, 0), (0, section_len - tex_audio.shape[-1])))
+                                    mix_vol = float(params.get("volume", 0.3))
+                                    y[:, start_sample:end_sample] += tex_audio * mix_vol
+                                    _log(job, f"  ✅ Texture mixed into {stem_name}", "success")
 
                     # Save modified stem
                     output = y.squeeze()
