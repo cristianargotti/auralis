@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
 
+    # Gemini (AI Critic)
+    gemini_api_key: str = ""
+
     # AWS
     aws_profile: str = ""
     aws_region: str = "us-east-1"

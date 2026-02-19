@@ -23,6 +23,12 @@ COPY README.md ./
 RUN uv sync --frozen --no-dev \
     --extra ml --extra audio
 
+# Install basic-pitch with ONNX backend (bypass TF requirement for Python 3.12)
+# basic-pitch core deps (librosa, numpy, scipy, scikit-learn) already installed via ml/audio extras
+# We install --no-deps to skip the tensorflow marker, then add onnxruntime for inference
+RUN uv pip install --no-deps basic-pitch==0.4.0 pretty-midi mir-eval && \
+    uv pip install onnxruntime importlib-resources
+
 EXPOSE 8000
 
 CMD ["uv", "run", "uvicorn", "auralis.api.server:app", "--host", "0.0.0.0", "--port", "8000"]

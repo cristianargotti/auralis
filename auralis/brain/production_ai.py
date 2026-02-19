@@ -233,13 +233,13 @@ def _apply_narrative_fx(
 
         # Find the section(s) that match this name
         for section in arrangement.sections:
-            if section.name.lower() != section_name:
+            if section.template.name.lower() != section_name:
                 continue
 
             # Calculate sample range for this section
             bar_samples = int(60.0 / plan.bpm * 4 * sr)
             start_sample = section.start_bar * bar_samples
-            end_sample = min(start_sample + section.bars * bar_samples, total_len)
+            end_sample = min(start_sample + section.template.bars * bar_samples, total_len)
             if start_sample >= total_len:
                 continue
 
@@ -419,7 +419,7 @@ def render_track(
     if plan.section_details:
         detail_map = {d.get("name", "").lower(): d for d in plan.section_details}
         for section in arrangement.sections:
-            detail = detail_map.get(section.name.lower())
+            detail = detail_map.get(section.template.name.lower())
             if detail:
                 if "energy" in detail:
                     section.template = SectionTemplate(

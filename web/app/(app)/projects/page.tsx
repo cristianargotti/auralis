@@ -68,14 +68,19 @@ export default function ProjectsPage() {
 
     const fetchData = useCallback(async () => {
         try {
-            const [jobsRes, statsRes] = await Promise.all([
-                apiFetch("/api/reconstruct/jobs"),
-                apiFetch("/api/reconstruct/projects/stats"),
-            ]);
+            const jobsRes = await apiFetch("/api/reconstruct/jobs");
             const jobsData = await jobsRes.json();
-            const statsData = await statsRes.json();
-            setJobs(jobsData);
-            setStats(statsData);
+            // /jobs returns {jobs: [...], total: N} — extract the array
+            const jobsList = Array.isArray(jobsData) ? jobsData : (jobsData.jobs || []);
+            setJobs(jobsList);
+
+            try {
+                const statsRes = await apiFetch("/api/reconstruct/projects/stats");
+                const statsData = await statsRes.json();
+                setStats(statsData);
+            } catch {
+                // Stats endpoint may not return expected shape — ignore
+            }
         } catch (e) {
             console.error("Failed to load projects", e);
         } finally {
@@ -350,8 +355,8 @@ export default function ProjectsPage() {
                             </div>
                             <div
                                 className={`text-2xl font-bold mt-1 ${stats.errored > 0
-                                        ? "text-red-400"
-                                        : "text-emerald-400"
+                                    ? "text-red-400"
+                                    : "text-emerald-400"
                                     }`}
                             >
                                 {stats.errored}
@@ -479,8 +484,8 @@ export default function ProjectsPage() {
                                     <tr
                                         key={job.job_id}
                                         className={`border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors ${selected.has(job.job_id)
-                                                ? "bg-cyan-500/5"
-                                                : ""
+                                            ? "bg-cyan-500/5"
+                                            : ""
                                             }`}
                                     >
                                         <td className="px-4 py-3">
@@ -533,10 +538,10 @@ export default function ProjectsPage() {
                                             {job.qc_score !== null ? (
                                                 <span
                                                     className={`text-xs font-mono font-bold ${job.qc_score >= 90
-                                                            ? "text-emerald-400"
-                                                            : job.qc_score >= 70
-                                                                ? "text-amber-400"
-                                                                : "text-red-400"
+                                                        ? "text-emerald-400"
+                                                        : job.qc_score >= 70
+                                                            ? "text-amber-400"
+                                                            : "text-red-400"
                                                         }`}
                                                 >
                                                     {job.qc_score.toFixed(1)}%

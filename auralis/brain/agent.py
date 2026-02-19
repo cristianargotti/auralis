@@ -1,7 +1,7 @@
 """AURALIS Brain — LLM Orchestrator for AI music production.
 
-Uses OpenAI GPT for:
-- Production decisions (genre analysis, arrangement planning)  
+Uses Gemini 3 Pro for:
+- Production decisions (genre analysis, arrangement planning)
 - Track description → arrangement generation
 - Effect chain selection
 - Mixing/mastering recommendations
@@ -15,7 +15,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from openai import OpenAI
+from auralis.brain.gemini_client import generate as gemini_generate
 
 
 # ── Configuration ────────────────────────────────────────
@@ -25,14 +25,9 @@ from openai import OpenAI
 class BrainConfig:
     """LLM orchestrator configuration."""
 
-    model: str = "gpt-4o"
+    model: str = "gemini-3-pro-preview"  # Gemini 3 Pro (most intelligent)
     temperature: float = 0.7
     max_tokens: int = 4096
-
-    @property
-    def client(self) -> OpenAI:
-        api_key = os.getenv("OPENAI_API_KEY", "")
-        return OpenAI(api_key=api_key)
 
 
 @dataclass
@@ -197,9 +192,9 @@ def generate_production_plan(
     """Generate a production plan from a natural language description.
 
     If reference_dna is provided, the LLM learns from analyzed reference tracks.
+    Uses Gemini 3 Pro with automatic fallback to Gemini 2.5 Pro / Flash.
     """
     cfg = config or BrainConfig()
-    client = cfg.client
 
     # Build the prompt with optional reference context
     user_msg = f"Create a production plan for: {description}"
@@ -207,23 +202,24 @@ def generate_production_plan(
         ref_summary = json.dumps(reference_dna, indent=2, default=str)
         user_msg += f"\n\n## Reference Track DNA (learn from this):\n{ref_summary}"
 
-    response = client.chat.completions.create(
-        model=cfg.model,
-        temperature=cfg.temperature,
+    result = gemini_generate(
+        prompt=user_msg,
+        system_prompt=SYSTEM_PROMPT_PRODUCER,
+        json_mode=True,
         max_tokens=cfg.max_tokens,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_PRODUCER},
-            {"role": "user", "content": user_msg},
-        ],
+        temperature=cfg.temperature,
+        preferred_model=cfg.model,
     )
 
-    raw = response.choices[0].message.content or "{}"
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        data = {}
+    if isinstance(result, dict):
+        data = result
+        raw = json.dumps(result, default=str)
+    else:
+        raw = str(result)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = {}
 
     return ProductionPlan(
         title=data.get("title", "Untitled"),
@@ -251,24 +247,22 @@ def get_mixing_advice(
 ) -> dict[str, Any]:
     """Get AI mixing recommendations for a set of tracks."""
     cfg = config or BrainConfig()
-    client = cfg.client
 
-    response = client.chat.completions.create(
-        model=cfg.model,
-        temperature=0.5,
+    result = gemini_generate(
+        prompt=f"Provide mixing recommendations for these tracks:\n{json.dumps(tracks_info, indent=2)}",
+        system_prompt=SYSTEM_PROMPT_MIXER,
+        json_mode=True,
         max_tokens=cfg.max_tokens,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_MIXER},
-            {"role": "user", "content": f"Provide mixing recommendations for these tracks:\n{json.dumps(tracks_info, indent=2)}"},
-        ],
+        temperature=0.5,
+        preferred_model=cfg.model,
     )
 
-    raw = response.choices[0].message.content or "{}"
+    if isinstance(result, dict):
+        return result
     try:
-        return json.loads(raw)
+        return json.loads(str(result))
     except json.JSONDecodeError:
-        return {"error": "Failed to parse response", "raw": raw}
+        return {"error": "Failed to parse response", "raw": str(result)}
 
 
 def chat(
@@ -278,29 +272,32 @@ def chat(
 ) -> str:
     """General chat about music production."""
     cfg = config or BrainConfig()
-    client = cfg.client
 
-    messages = [
-        {"role": "system", "content": (
+    # Build context from history
+    context = ""
+    if history:
+        for msg in history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            context += f"\n{role.upper()}: {content}"
+
+    prompt = f"{context}\nUSER: {message}" if context else message
+
+    result = gemini_generate(
+        prompt=prompt,
+        system_prompt=(
             "You are AURALIS, an AI music production assistant. "
             "You help with sound design, mixing, mastering, and music theory. "
             "Be concise and practical. When relevant, suggest specific "
             "AURALIS features (presets, effects, generators) that could help."
-        )}
-    ]
-
-    if history:
-        messages.extend(history)
-    messages.append({"role": "user", "content": message})
-
-    response = client.chat.completions.create(
-        model=cfg.model,
-        temperature=cfg.temperature,
+        ),
+        json_mode=False,
         max_tokens=cfg.max_tokens,
-        messages=messages,
+        temperature=cfg.temperature,
+        preferred_model=cfg.model,
     )
 
-    return response.choices[0].message.content or ""
+    return str(result)
 
 
 # ── Full Pipeline Orchestrator ───────────────────────────

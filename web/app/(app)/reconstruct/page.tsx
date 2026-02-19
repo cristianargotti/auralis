@@ -1291,7 +1291,7 @@ export default function ReconstructPage() {
                                         Gemini 3 Pro
                                     </Badge>
                                 </div>
-                                {!criticLoading && criticProposals.length === 0 && (
+                                {!criticLoading && criticProposals.length === 0 && !criticAssessment && (
                                     <button
                                         onClick={async () => {
                                             setCriticLoading(true);
@@ -1308,7 +1308,7 @@ export default function ReconstructPage() {
                                                     setCriticError(data.error);
                                                 } else {
                                                     setCriticProposals(data.proposals || []);
-                                                    setCriticAssessment(data.overall_assessment || "");
+                                                    setCriticAssessment(data.overall_assessment || data.message || "");
                                                     setCriticDiagnosis(data.diagnosis_summary || null);
                                                     // Initialize all proposals as pending
                                                     const states: Record<string, "pending" | "approved" | "rejected"> = {};
@@ -1325,6 +1325,16 @@ export default function ReconstructPage() {
                                         ✨ Analyze & Propose Fixes
                                     </button>
                                 )}
+                                {!criticLoading && criticProposals.length === 0 && criticAssessment && (
+                                    <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-950/20 border border-emerald-800/30">
+                                        <span className="text-2xl">🎉</span>
+                                        <div>
+                                            <div className="text-sm font-medium text-emerald-300">{criticAssessment}</div>
+                                            <div className="text-xs text-zinc-500 mt-1">Use Directed Improve below to make creative changes</div>
+                                        </div>
+                                    </div>
+                                )}
+
                             </div>
                             <CardDescription>AI-powered track analysis — detects issues and suggests improvements</CardDescription>
                         </CardHeader>
