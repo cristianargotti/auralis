@@ -3069,6 +3069,12 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
             shutil.copy2(original_src, project_dir / "original.wav")
             _log(job, f"📁 Copied original audio from parent project", "info")
 
+        # Copy parent's master for fair QC comparison (mastered vs mastered)
+        parent_master_src = parent_dir / "master.wav"
+        if parent_master_src.exists():
+            shutil.copy2(parent_master_src, project_dir / "parent_master.wav")
+            _log(job, "📁 Copied parent master for fair QC A/B", "info")
+
         # Copy stems directory for re-mixing
         parent_stems = parent_dir / "stems"
         child_stems = project_dir / "stems"
@@ -3683,7 +3689,10 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
 
         import asyncio
         qc_result: dict[str, Any] = {}
-        original_path = project_dir / "original.wav"
+        # Fair A/B: compare improved master vs parent's master (mastered vs mastered).
+        # Using raw original.wav would unfairly penalize dynamic range, RMS, etc.
+        parent_master_ref = project_dir / "parent_master.wav"
+        original_path = parent_master_ref if parent_master_ref.exists() else project_dir / "original.wav"
         master_path_qc = project_dir / "master.wav"
 
         if original_path.exists() and master_path_qc.exists():
