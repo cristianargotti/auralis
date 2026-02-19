@@ -173,16 +173,14 @@ def generate(
                     # Gemini often outputs \' which is invalid in JSON
                     sanitized = candidate
                     sanitized = sanitized.replace("\\'", "'")  # Fix escaped single quotes
-                    sanitized = re.sub(r'\\([^"\\\/bfnrtu])', r'\1', sanitized)  # Remove other invalid escapes
+                    sanitized = re.sub(r'\\([^"\\/bfnrtu])', r'\1', sanitized)  # Remove other invalid escapes
                     try:
                         return json.loads(sanitized)
                     except json.JSONDecodeError:
                         pass
 
-                    # Strategy 6: Try to fix unescaped control chars inside strings
-                    # Replace literal newlines inside JSON strings with \n
+                    # Strategy 6: Try ast.literal_eval
                     try:
-                        # More aggressive: try ast.literal_eval then convert
                         import ast
                         result = ast.literal_eval(sanitized)
                         if isinstance(result, dict):
@@ -190,10 +188,43 @@ def generate(
                     except (ValueError, SyntaxError):
                         pass
 
+                    # Strategy 7: Handle truncated JSON (response cut off by max_tokens)
+                    # Close any open brackets/braces so we get partial data
+                    truncated = sanitized.rstrip()
+                    # Remove trailing incomplete string value (cut mid-string)
+                    if truncated.count('"') % 2 != 0:
+                        last_quote = truncated.rfind('"')
+                        truncated = truncated[:last_quote + 1]
+                    # Remove trailing comma
+                    truncated = truncated.rstrip().rstrip(',')
+                    # Count open vs close brackets
+                    open_brackets = truncated.count('[') - truncated.count(']')
+                    open_braces = truncated.count('{') - truncated.count('}')
+                    truncated += ']' * max(0, open_brackets) + '}' * max(0, open_braces)
+                    try:
+                        result = json.loads(truncated)
+                        logger.info(
+                            "gemini_json_recovered_truncated",
+                            model=model,
+                            original_length=len(text),
+                        )
+                        return result
+                    except json.JSONDecodeError:
+                        pass
+
+                # Log detailed failure info for debugging
+                last_err = ""
+                try:
+                    json.loads(text)
+                except json.JSONDecodeError as e:
+                    last_err = str(e)
+
                 logger.warning(
                     "gemini_json_parse_fail",
                     model=model,
+                    text_length=len(text),
                     text_preview=text[:300],
+                    parse_error=last_err[:200],
                 )
                 # Return raw text wrapped in dict — consumers must handle parse_error
                 return {"raw_response": text, "parse_error": True}

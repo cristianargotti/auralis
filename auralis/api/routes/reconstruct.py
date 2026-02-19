@@ -2852,7 +2852,28 @@ You can apply AS MANY modifications as needed per section. Use multiple changes 
                         return {"type": "arrangement", "description": f"{title}: {impl}",
                                 "params": {"action": "fade_out"}}
 
-                    # Priority 6: Specific effects (score-based, not first-match)
+                    # Priority 6: Detect COMPLAINTS (negative context) before effects
+                    # When user says "hay saturación" they want LESS, not more
+                    complaint_indicators = [
+                        "too much", "demasiado", "exagerado", "reduce", "less",
+                        "remove", "quitar", "fix", "arreglar", "problema", "issue",
+                        "bad", "mal", "no me gusta", "suena mal", "distorsion",
+                        "clip", "harsh", "muddy", "thin", "weak",
+                    ]
+                    is_complaint = any(kw in text for kw in complaint_indicators)
+
+                    # If user complains about saturation/distortion → reduce volume, don't add more
+                    if is_complaint and any(kw in text for kw in ["saturaci", "distorsi", "clip", "harsh", "overdrive"]):
+                        return {"type": "volume", "description": f"Fix: {title}. {impl}",
+                                "params": {"db": -3.0}}
+
+                    # If user complains about something being "too much" or "exagerado" → reduce
+                    if is_complaint and any(kw in text for kw in ["exagerado", "too much", "demasiado", "too loud", "muy fuerte"]):
+                        return {"type": "volume", "description": f"Reduce: {title}. {impl}",
+                                "params": {"db": -4.0}}
+
+                    # Priority 7: Specific effects (score-based, not first-match)
+                    # Only apply when user clearly WANTS an effect, not when complaining
                     effect_scores = {}
                     effect_kw = {
                         "shimmer_reverb": ["shimmer", "ethereal reverb", "cathedral", "lush reverb"],
@@ -2861,7 +2882,7 @@ You can apply AS MANY modifications as needed per section. Use multiple changes 
                         "sidechain": ["sidechain", "pump", "ducking", "breathing"],
                         "filter_sweep": ["sweep", "filter sweep", "rising filter", "opening"],
                         "filter": ["filter", "eq", "low-pass", "high-pass", "cutoff", "low pass", "high pass"],
-                        "distortion": ["saturation", "distortion", "drive", "overdrive", "grit", "warmth", "tape"],
+                        "distortion": ["add saturation", "add distortion", "more drive", "add grit", "warmth", "analog warmth"],
                         "chorus": ["chorus", "ensemble", "detune", "thicken"],
                         "compressor": ["compress", "dynamics", "punch", "glue", "tighter"],
                         "stereo_width": ["stereo", "width", "widen", "wider", "narrow", "spacious", "panorama"],
