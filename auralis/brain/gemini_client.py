@@ -132,6 +132,7 @@ def generate(
             if json_mode:
                 # Multi-strategy JSON extraction
                 cleaned = text.strip()
+                import re
 
                 # Strategy 1: Direct parse
                 try:
@@ -142,41 +143,59 @@ def generate(
                 # Strategy 2: Strip markdown code fences
                 if cleaned.startswith("```"):
                     lines = cleaned.split("\n")
-                    # Remove first line (```json) and last line (```)
                     inner = "\n".join(lines[1:])
                     if inner.rstrip().endswith("```"):
                         inner = inner.rstrip()[:-3].rstrip()
                     try:
                         return json.loads(inner)
                     except json.JSONDecodeError:
-                        pass
+                        cleaned = inner  # Continue with fence-stripped text
 
                 # Strategy 3: Find JSON object via braces
                 first_brace = cleaned.find("{")
                 last_brace = cleaned.rfind("}")
                 if first_brace != -1 and last_brace > first_brace:
+                    extracted = cleaned[first_brace:last_brace + 1]
                     try:
-                        return json.loads(cleaned[first_brace:last_brace + 1])
+                        return json.loads(extracted)
                     except json.JSONDecodeError:
                         pass
 
-                # Strategy 4: Try fixing common issues (trailing commas)
-                import re
-                if first_brace != -1 and last_brace > first_brace:
-                    candidate = cleaned[first_brace:last_brace + 1]
-                    # Remove trailing commas before } or ]
-                    candidate = re.sub(r',\s*([}\]])', r'\1', candidate)
+                    # Strategy 4: Fix trailing commas
+                    candidate = re.sub(r',\s*([}\]])', r'\1', extracted)
                     try:
                         return json.loads(candidate)
                     except json.JSONDecodeError:
                         pass
 
+                    # Strategy 5: Fix invalid escape sequences (Gemini Flash issue)
+                    # JSON only allows: \" \\ \/ \b \f \n \r \t \uXXXX
+                    # Gemini often outputs \' which is invalid in JSON
+                    sanitized = candidate
+                    sanitized = sanitized.replace("\\'", "'")  # Fix escaped single quotes
+                    sanitized = re.sub(r'\\([^"\\\/bfnrtu])', r'\1', sanitized)  # Remove other invalid escapes
+                    try:
+                        return json.loads(sanitized)
+                    except json.JSONDecodeError:
+                        pass
+
+                    # Strategy 6: Try to fix unescaped control chars inside strings
+                    # Replace literal newlines inside JSON strings with \n
+                    try:
+                        # More aggressive: try ast.literal_eval then convert
+                        import ast
+                        result = ast.literal_eval(sanitized)
+                        if isinstance(result, dict):
+                            return result
+                    except (ValueError, SyntaxError):
+                        pass
+
                 logger.warning(
                     "gemini_json_parse_fail",
                     model=model,
-                    text_preview=text[:200],
+                    text_preview=text[:300],
                 )
-                # Return raw text wrapped in dict
+                # Return raw text wrapped in dict — consumers must handle parse_error
                 return {"raw_response": text, "parse_error": True}
 
             return text

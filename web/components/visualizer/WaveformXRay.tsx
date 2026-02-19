@@ -175,8 +175,8 @@ function WaveformXRayInner({ jobId }: WaveformXRayProps) {
                     barRadius: 3,
                     height: 140,
                     normalize: true,
-                    minPxPerSec: zoom,
-                    url: `${process.env.NEXT_PUBLIC_API_URL || ''}/api/reconstruct/audio/${jobId}/${audioSource}`,
+                    minPxPerSec: 10,
+                    url: `${process.env.NEXT_PUBLIC_API_URL || ''}/api/reconstruct/audio/${jobId}/original`,
                     fetchParams: {
                         headers: authHeaders as HeadersInit
                     },
@@ -223,7 +223,7 @@ function WaveformXRayInner({ jobId }: WaveformXRayProps) {
             if (animRef.current) cancelAnimationFrame(animRef.current);
             try { ws?.destroy(); } catch { }
         };
-    }, [data, jobId, audioSource, zoom]);
+    }, [data, jobId]);  // Only re-init on job change, NOT zoom/source
 
     // Add Regions (Layers)
     useEffect(() => {
@@ -259,12 +259,25 @@ function WaveformXRayInner({ jobId }: WaveformXRayProps) {
         }
     }, [wavesurfer, data]);
 
-    // Handle Zoom
+    // Handle Zoom — just update zoom level, don't recreate
     useEffect(() => {
         if (wavesurfer) {
             try { wavesurfer.zoom(zoom); } catch { }
         }
     }, [zoom, wavesurfer]);
+
+    // Handle Audio Source change — load new URL without recreating WaveSurfer
+    useEffect(() => {
+        if (wavesurfer) {
+            const token = typeof window !== 'undefined' ? localStorage.getItem('auralis_token') : null;
+            const url = `${process.env.NEXT_PUBLIC_API_URL || ''}/api/reconstruct/audio/${jobId}/${audioSource}`;
+            try {
+                wavesurfer.load(url, data?.waveform ? [data.waveform] : undefined);
+            } catch (err) {
+                console.warn('[WaveformXRay] Failed to load new source:', err);
+            }
+        }
+    }, [audioSource]);  // eslint-disable-line react-hooks/exhaustive-deps
 
     // Handle Volume
     useEffect(() => {
@@ -342,8 +355,8 @@ function WaveformXRayInner({ jobId }: WaveformXRayProps) {
                     <button
                         onClick={() => setAudioSource('original')}
                         className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-all ${audioSource === 'original'
-                                ? 'bg-violet-600/80 text-white shadow-lg shadow-violet-500/20'
-                                : 'text-zinc-500 hover:text-zinc-300'
+                            ? 'bg-violet-600/80 text-white shadow-lg shadow-violet-500/20'
+                            : 'text-zinc-500 hover:text-zinc-300'
                             }`}
                     >
                         Original
@@ -351,8 +364,8 @@ function WaveformXRayInner({ jobId }: WaveformXRayProps) {
                     <button
                         onClick={() => setAudioSource('mix')}
                         className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-all ${audioSource === 'mix'
-                                ? 'bg-emerald-600/80 text-white shadow-lg shadow-emerald-500/20'
-                                : 'text-zinc-500 hover:text-zinc-300'
+                            ? 'bg-emerald-600/80 text-white shadow-lg shadow-emerald-500/20'
+                            : 'text-zinc-500 hover:text-zinc-300'
                             }`}
                     >
                         Reconstructed
@@ -414,8 +427,8 @@ function WaveformXRayInner({ jobId }: WaveformXRayProps) {
                         <button
                             onClick={togglePlay}
                             className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${isPlaying
-                                    ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30 hover:bg-violet-600/30'
-                                    : 'bg-violet-600/80 text-white shadow-lg shadow-violet-500/25 hover:bg-violet-500/80'
+                                ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30 hover:bg-violet-600/30'
+                                : 'bg-violet-600/80 text-white shadow-lg shadow-violet-500/25 hover:bg-violet-500/80'
                                 }`}
                         >
                             {isPlaying ? (

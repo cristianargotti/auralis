@@ -2418,10 +2418,32 @@ Generate **5-8 specific proposals** that would genuinely elevate this track. Eac
         )
 
         if isinstance(ai_response, dict):
-            proposals = ai_response.get("proposals", [])
-            assessment = ai_response.get("overall_assessment", "")
-            strengths = ai_response.get("track_strengths", [])
-            priority = ai_response.get("improvement_priority", "")
+            # Handle parse_error: try to salvage proposals from raw text
+            if ai_response.get("parse_error") and "raw_response" in ai_response:
+                import re as _re
+                raw = ai_response["raw_response"]
+                # Try extracting just the proposals array
+                prop_match = _re.search(r'"proposals"\s*:\s*(\[.*?\])\s*[,}]', raw, _re.DOTALL)
+                if prop_match:
+                    try:
+                        raw_props = prop_match.group(1)
+                        raw_props = raw_props.replace("\\'", "'")
+                        raw_props = _re.sub(r',\s*([}\]])', r'\1', raw_props)
+                        proposals = json.loads(raw_props)
+                    except Exception:
+                        proposals = []
+                else:
+                    proposals = []
+                # Also try to get other fields
+                assess_match = _re.search(r'"overall_assessment"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', raw)
+                assessment = assess_match.group(1).replace('\\"', '"') if assess_match else ""
+                strengths = []
+                priority = ""
+            else:
+                proposals = ai_response.get("proposals", [])
+                assessment = ai_response.get("overall_assessment", "")
+                strengths = ai_response.get("track_strengths", [])
+                priority = ai_response.get("improvement_priority", "")
         else:
             proposals = []
             assessment = str(ai_response)

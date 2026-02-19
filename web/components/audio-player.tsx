@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { apiFetch } from "@/lib/api";
 
 /* ── Types ── */
 interface Track {
@@ -41,25 +40,18 @@ function getAudioUrl(jobId: string, fileKey: string): string {
     return `/api/reconstruct/audio/${jobId}/${fileKey}${token ? `?token=${token}` : ""}`;
 }
 
-/** Fetch audio as blob with proper auth and return a blob URL */
-async function fetchAudioBlob(jobId: string, fileKey: string): Promise<string> {
-    const res = await apiFetch(`/api/reconstruct/audio/${jobId}/${fileKey}`);
-    if (!res.ok) throw new Error(`Audio fetch failed: ${res.status}`);
-    const blob = await res.blob();
-    return URL.createObjectURL(blob);
-}
-
 /* ── Component ── */
 export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = true, stems = [] }: AudioPlayerProps) {
     const audioRef = useRef<HTMLAudioElement>(null);
-    const abAudioRef = useRef<HTMLAudioElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animRef = useRef<number>(0);
     const analyserRef = useRef<AnalyserNode | null>(null);
     const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
     const ctxRef = useRef<AudioContext | null>(null);
 
-    const [activeTrack, setActiveTrack] = useState<string>("original");
+    // Default to master if available, else original
+    const defaultTrack = hasMaster ? "master" : "original";
+    const [activeTrack, setActiveTrack] = useState<string>(defaultTrack);
     const [playing, setPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
@@ -67,9 +59,9 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
     const [abMode, setAbMode] = useState(false);
     const [abTrack, setAbTrack] = useState<"original" | "master">("original");
     const [loading, setLoading] = useState(false);
-    const [waveformData, setWaveformData] = useState<number[]>([]);
+    const [buffering, setBuffering] = useState(false);
 
-    // Available tracks based on what files exist
+    // Available tracks
     const availableTracks = TRACKS.filter((t) => {
         if (t.key === "original") return hasOriginal;
         if (t.key === "master") return hasMaster;
@@ -77,7 +69,7 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
         return true;
     });
 
-    // Load track — stream directly via ?token= URL (API supports dual-mode auth)
+    // Load track — set src and rely on browser's range-request streaming
     const loadTrack = useCallback(async (trackKey: string) => {
         const audio = audioRef.current;
         if (!audio) return;
@@ -85,17 +77,21 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
         const wasPlaying = playing;
         const pos = audio.currentTime;
 
-        // Direct URL streaming with ?token= — much faster for large WAV files
         audio.src = getAudioUrl(jobId, trackKey);
-
         audio.load();
-        audio.onloadeddata = () => {
-            setLoading(false);
+
+        audio.onloadedmetadata = () => {
+            // Metadata loaded = instant: we have duration, can show controls
             setDuration(audio.duration);
-            if (wasPlaying) {
-                audio.currentTime = pos;
+            setLoading(false);
+            if (wasPlaying && pos > 0) {
+                audio.currentTime = Math.min(pos, audio.duration);
                 audio.play().catch(() => { });
             }
+        };
+        audio.onloadeddata = () => {
+            // Enough data to start playing — ensure loading is cleared
+            setLoading(false);
         };
         audio.onerror = () => setLoading(false);
         setActiveTrack(trackKey);
@@ -107,7 +103,7 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
         loadTrack(trackKey);
     }, [activeTrack, loadTrack]);
 
-    // A/B Toggle — instant switch between original and master
+    // A/B Toggle
     const toggleAB = useCallback(() => {
         if (!abMode) {
             setAbMode(true);
@@ -127,7 +123,6 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
         if (playing) {
             audio.pause();
         } else {
-            // Setup audio context for visualizer on first play
             if (!ctxRef.current) {
                 const ctx = new AudioContext();
                 const analyser = ctx.createAnalyser();
@@ -153,17 +148,23 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
         audio.currentTime = pct * duration;
     }, [duration]);
 
-    // Time update
+    // Time update + buffering detection
     useEffect(() => {
         const audio = audioRef.current;
         if (!audio) return;
         const handler = () => setCurrentTime(audio.currentTime);
         const endHandler = () => setPlaying(false);
+        const waitingHandler = () => setBuffering(true);
+        const canplayHandler = () => setBuffering(false);
         audio.addEventListener("timeupdate", handler);
         audio.addEventListener("ended", endHandler);
+        audio.addEventListener("waiting", waitingHandler);
+        audio.addEventListener("canplay", canplayHandler);
         return () => {
             audio.removeEventListener("timeupdate", handler);
             audio.removeEventListener("ended", endHandler);
+            audio.removeEventListener("waiting", waitingHandler);
+            audio.removeEventListener("canplay", canplayHandler);
         };
     }, []);
 
@@ -174,7 +175,7 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
 
     // Load initial track
     useEffect(() => {
-        loadTrack("original");
+        loadTrack(defaultTrack);
     }, [jobId]); // eslint-disable-line
 
     // Visualizer animation
@@ -241,6 +242,9 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
                             {activeConfig.icon} {activeConfig.label}
                         </span>
                     )}
+                    {buffering && (
+                        <span className="text-[10px] text-amber-400 animate-pulse">⏳ Buffering...</span>
+                    )}
                 </div>
                 {/* A/B Toggle */}
                 {hasOriginal && hasMaster && (
@@ -266,7 +270,10 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
                 />
                 {loading && (
                     <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/70">
-                        <div className="animate-pulse text-zinc-500 text-sm">Loading audio...</div>
+                        <div className="flex items-center gap-2">
+                            <div className="w-4 h-4 rounded-full border-2 border-zinc-500/30 border-t-zinc-400 animate-spin" />
+                            <span className="text-zinc-500 text-xs">Loading...</span>
+                        </div>
                     </div>
                 )}
             </div>
@@ -364,9 +371,8 @@ export default function AudioPlayer({ jobId, hasOriginal = true, hasMaster = tru
                 </div>
             </div>
 
-            {/* Hidden audio element */}
-            <audio ref={audioRef} preload="auto" crossOrigin="anonymous" />
-            <audio ref={abAudioRef} preload="auto" crossOrigin="anonymous" />
+            {/* Hidden audio element — preload="none" for instant UI, streaming via range requests */}
+            <audio ref={audioRef} preload="none" crossOrigin="anonymous" />
         </div>
     );
 }
