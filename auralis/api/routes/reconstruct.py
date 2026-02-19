@@ -3091,14 +3091,25 @@ You can apply AS MANY modifications as needed per section. Use multiple changes 
             return "general"
 
         # Apply changes from the AI plan
+        _log(job, f"📋 AI Plan: {ai_plan.get('plan_title', '?')} — {len(changes)} changes", "info")
+        _log(job, f"💡 Understanding: {ai_plan.get('understanding', '?')[:150]}", "info")
+
         for change_idx, change in enumerate(changes):
             bar_start = change.get("bar_start", 0)
             bar_end = change.get("bar_end", 8)
-            stems_affected_list = change.get("stems_affected", [])
             modifications = change.get("modifications", [])
             section_name = change.get("section", "?")
 
-            _log(job, f"🔧 Processing: {section_name} (bars {bar_start}-{bar_end})", "info")
+            # Resolve stems — try multiple field names that Gemini might use
+            stems_affected_list = (
+                change.get("stems_affected")
+                or change.get("stems")
+                or change.get("affected_stems")
+                or []
+            )
+
+            _log(job, f"🔧 Processing: {section_name} (bars {bar_start}-{bar_end}), "
+                       f"stems={stems_affected_list or 'auto'}, {len(modifications)} mods", "info")
 
             # Build list of (stem_name, modifications) to process
             stem_mod_pairs = []
@@ -3107,9 +3118,21 @@ You can apply AS MANY modifications as needed per section. Use multiple changes 
                 for s in stems_affected_list:
                     stem_mod_pairs.append((s, modifications))
             elif modifications:
-                # Feedback parser format: each modification has its own "stem"
-                for mod in modifications:
-                    stem_mod_pairs.append((mod.get("stem", "other"), [mod]))
+                # Check if modifications have per-mod stem fields
+                has_per_mod_stem = any(mod.get("stem") for mod in modifications)
+                if has_per_mod_stem:
+                    # Feedback parser format: each modification has its own "stem"
+                    for mod in modifications:
+                        stem_mod_pairs.append((mod.get("stem", "other"), [mod]))
+                else:
+                    # FALLBACK: Gemini didn't specify stems — apply to all stems
+                    _log(job, "  ⚠️ No stems specified — applying to all stems", "warning")
+                    for stem_name in ["drums", "bass", "vocals", "other"]:
+                        stem_mod_pairs.append((stem_name, modifications))
+
+            if not stem_mod_pairs:
+                _log(job, f"  ⚠️ Skipping change {change_idx}: no stems or modifications resolved", "warning")
+                continue
 
             for stem_name_raw, mods_for_stem in stem_mod_pairs:
                 # Normalize Gemini's stem names to actual Demucs file names
