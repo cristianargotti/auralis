@@ -1499,12 +1499,62 @@ export default function ReconstructPage() {
 
                             {/* Summary of decisions */}
                             {criticProposals.length > 0 && Object.values(proposalStates).some(s => s !== "pending") && (
-                                <div className="mt-4 pt-3 border-t border-zinc-800/50">
+                                <div className="mt-4 pt-3 border-t border-zinc-800/50 space-y-3">
                                     <div className="flex items-center gap-3 text-xs text-zinc-500">
                                         <span>✅ {Object.values(proposalStates).filter(s => s === "approved").length} approved</span>
                                         <span>❌ {Object.values(proposalStates).filter(s => s === "rejected").length} rejected</span>
                                         <span>⏳ {Object.values(proposalStates).filter(s => s === "pending").length} pending</span>
                                     </div>
+                                    {/* Apply Approved button */}
+                                    {Object.values(proposalStates).some(s => s === "approved") && (
+                                        <button
+                                            onClick={async () => {
+                                                if (!job) return;
+                                                // Collect approved proposals
+                                                const approved = criticProposals.filter(
+                                                    (p: any) => proposalStates[p.id] === "approved"
+                                                );
+                                                // Format as feedback for Directed Improve
+                                                const feedback = approved.map((p: any, i: number) =>
+                                                    `${i + 1}. ${p.title}: ${p.description}${p.params?.details ? ` — Implementation: ${p.params.details}` : ""}${p.params?.bars ? ` (bars ${p.params.bars.join("-")})` : ""}${p.params?.stems_affected ? ` [stems: ${p.params.stems_affected.join(", ")}]` : ""}`
+                                                ).join("\n");
+                                                const fullFeedback = `Apply these ${approved.length} AI-approved improvements:\n\n${feedback}`;
+
+                                                // Send to Directed Improve
+                                                setReconstructing(true);
+                                                try {
+                                                    const res = await fetch(`/api/reconstruct/improve/${job.job_id}`, {
+                                                        method: "POST",
+                                                        headers: { "Content-Type": "application/json" },
+                                                        body: JSON.stringify({ feedback: fullFeedback }),
+                                                    });
+                                                    if (res.ok) {
+                                                        const data = await res.json();
+                                                        setJob(data);
+                                                    } else {
+                                                        setCriticError(`Failed to start improvement (${res.status})`);
+                                                        setReconstructing(false);
+                                                    }
+                                                } catch (e: any) {
+                                                    setCriticError(e.message || "Failed to apply improvements");
+                                                    setReconstructing(false);
+                                                }
+                                            }}
+                                            disabled={reconstructing}
+                                            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-emerald-600/20 via-teal-600/20 to-cyan-600/20 border border-emerald-500/40 text-emerald-300 hover:text-emerald-200 hover:border-emerald-400/60 hover:shadow-lg hover:shadow-emerald-500/10 transition-all text-sm font-medium"
+                                        >
+                                            {reconstructing ? (
+                                                <>
+                                                    <span className="w-4 h-4 rounded-full border-2 border-emerald-500/30 border-t-emerald-400 animate-spin" />
+                                                    Applying improvements...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    🚀 Apply {Object.values(proposalStates).filter(s => s === "approved").length} Approved Improvements
+                                                </>
+                                            )}
+                                        </button>
+                                    )}
                                 </div>
                             )}
                         </CardContent>
