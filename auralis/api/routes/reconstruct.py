@@ -2958,7 +2958,7 @@ Be creative, musical, and precise. Think like a professional producer who unders
                 try:
                     import multiprocessing
                     brain_plan_dict = None
-                    brain = result.get("brain_report")
+                    brain = parent_result.get("brain_report")
                     if brain:
                         brain_plan_dict = {
                             k: brain[k] for k in brain
@@ -3019,11 +3019,11 @@ Be creative, musical, and precise. Think like a professional producer who unders
                 })
 
         # Inherit ALL parent result data so UI shows full insights
-        parent_result = result.copy() if result else {}
-        parent_result.pop("files", None)  # will be replaced with child files
+        inherited = parent_result.copy() if parent_result else {}
+        inherited.pop("files", None)  # will be replaced with child files
 
         job["result"] = {
-            **parent_result,  # brain_report, qc, xray_analysis, plan, analysis, etc.
+            **inherited,  # brain_report, qc, xray_analysis, plan, analysis, etc.
             "stem_analysis": stem_analysis,  # may have been updated
             "files": {**files_info, "stems": stem_list},
             "improvement": {
