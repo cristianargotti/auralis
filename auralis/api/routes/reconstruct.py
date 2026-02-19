@@ -2255,20 +2255,13 @@ async def diagnose_track(job_id: str):
 
 @router.post("/propose/{job_id}")
 async def propose_fixes(job_id: str):
-    """Generate AI-powered fix proposals for diagnosed issues using Gemini 3 Pro.
+    """Generate AI-powered musical improvement proposals using Gemini.
 
-    Requires a completed diagnosis (call /diagnose first).
-    Returns actionable proposals the user can approve/reject.
+    Analyzes the full track context (instruments, arrangement, stems, energy)
+    and proposes both technical fixes AND creative/musical improvements.
     """
-    # First run diagnosis to get issues
+    # Run technical diagnosis first
     diagnosis = await diagnose_track(job_id)
-
-    if diagnosis["issue_count"] == 0:
-        return {
-            "job_id": job_id,
-            "message": "🎉 No issues found — your track sounds solid!",
-            "proposals": [],
-        }
 
     job = _reconstruct_jobs.get(job_id)
     if not job:
@@ -2277,8 +2270,9 @@ async def propose_fixes(job_id: str):
     analysis = result.get("analysis", {})
     stem_analysis = result.get("stem_analysis", {})
     brain_report = result.get("brain_report", {})
+    xray = result.get("xray_analysis", {})
 
-    # Build context for Gemini
+    # Build rich musical context for Gemini
     context = {
         "track_info": {
             "bpm": diagnosis["bpm"],
@@ -2287,7 +2281,7 @@ async def propose_fixes(job_id: str):
             "duration_s": diagnosis["duration"],
             "total_bars": diagnosis["total_bars"],
         },
-        "issues": diagnosis["issues"],
+        "technical_issues": diagnosis["issues"],
         "energy_map_summary": diagnosis["stem_analysis_summary"],
         "stem_info": {
             name: {
@@ -2300,7 +2294,24 @@ async def propose_fixes(job_id: str):
         },
     }
 
-    # Include brain reasoning if available
+    # Add deep analysis data if available
+    if analysis:
+        context["arrangement"] = {
+            "sections": analysis.get("sections", []),
+            "instruments_detected": analysis.get("instruments", []),
+            "genre_hints": analysis.get("genre", ""),
+            "mood": analysis.get("mood", ""),
+        }
+
+    # Add X-Ray bar-by-bar analysis if available
+    if xray:
+        context["bar_analysis"] = {
+            "total_bars": xray.get("total_bars"),
+            "energy_curve": xray.get("energy_curve", [])[:20],  # first 20 bars
+            "bar_descriptions": xray.get("bar_descriptions", [])[:10],
+        }
+
+    # Add brain reasoning if available
     if brain_report:
         context["brain_reasoning"] = {
             "reasoning_chain": brain_report.get("reasoning_chain", [])[:5],
@@ -2309,53 +2320,97 @@ async def propose_fixes(job_id: str):
 
     from auralis.brain.gemini_client import generate
 
-    prompt = f"""You are an expert music producer analyzing a {diagnosis['key']} {diagnosis['scale']} track at {diagnosis['bpm']} BPM.
+    prompt = f"""# AURALIS Producer Session — Deep Track Review
 
-The track has been analyzed and the following issues were found. For each issue, propose a specific, actionable fix.
+You are sitting in the studio, headphones on, reviewing a track for an artist who trusts your ear. This is not a technical audit — this is a **musical conversation**.
 
-## Track Context
+## The Track
+- **Key:** {diagnosis['key']} {diagnosis['scale']}
+- **BPM:** {diagnosis['bpm']}
+- **Duration:** {round(diagnosis['duration'])}s ({diagnosis['total_bars']} bars)
+
+## What We Know About This Track
 {json.dumps(context, indent=2, default=str)}
 
-## Instructions
-For each issue, generate a proposal with:
-1. A clear title (e.g., "Add pad fill at bar 16")
-2. A description explaining WHY this fix works musically
-3. The specific action to take
-4. Parameters for the fix
-5. Confidence level (0.0-1.0) in this being the right fix
-6. Impact level (high/medium/low)
+---
 
-Respond with this exact JSON structure:
+## How To Think About This
+
+Before writing proposals, mentally walk through the track from start to finish. Ask yourself:
+
+**1. THE FIRST 8 BARS** — Does the intro hook the listener immediately? Is there a sonic signature from the first beat, or does it take too long to get going? Would a DJ or playlist curator skip this intro?
+
+**2. ARRANGEMENT ARCHITECTURE** — Map the sections: intro → build → drop → breakdown → drop 2 → outro. Are all sections present? Is any section too long, too short, or missing entirely? Does the track have the classic "journey" structure, or does it plateau? Think about the **golden ratio** — the main drop should hit around 30-40% into the track.
+
+**3. SONIC PALETTE & INSTRUMENTATION** — Listen to each stem individually. Is the bass carrying enough weight for the genre? Are there enough textural layers in the "other" stem (pads, arps, FX, atmospherics)? Are the drums punchy enough? Is the kick-bass relationship tight? Are vocals (if present) treated with enough character — reverb, delay, pitch effects, chopping?
+
+**4. ENERGY NARRATIVE** — Plot the energy curve mentally. A great track tells a story: tension → release → tension → bigger release. Are there enough contrast points? Does the track breathe? Are there moments of silence or reduction that make the loud parts feel louder? Think about tracks by Bicep, Disclosure, or Bonobo — they master the art of energy dynamics.
+
+**5. RHYTHMIC IDENTITY** — Is the groove distinctive? Could you identify this track by its rhythm alone? Are there enough percussion layers (hats, shakers, congas, rides) to give the rhythm depth? Is there polyrhythmic interest or is it too straight?
+
+**6. HARMONIC DEPTH** — Is the chord progression interesting or generic? Are there unexpected harmonic movements? Could adding a counter-melody, a bass note variation, or a key change in the bridge add emotional depth?
+
+**7. SPATIAL DESIGN** — Think about the stereo field. Are elements spread across the soundstage, or is everything centered? Could panning automation on arps/fx/hats create more movement? Is reverb used to create depth (front-to-back), or is everything flat?
+
+**8. TRANSITION CRAFT** — How do sections connect? Are there risers, sweeps, drum fills, filter automations, reverse reverbs, or impact sounds at transition points? Or do sections just... start? Great transitions make or break a track.
+
+---
+
+## Your Output
+
+Generate **5-8 specific proposals** that would genuinely elevate this track. Each one should feel like advice from a mentor, not a robot.
+
+{f"We also detected {len(diagnosis['issues'])} technical issues — weave fixes for these into your proposals naturally." if diagnosis['issues'] else "No technical problems were detected — the production is clean. Focus 100% on CREATIVE and MUSICAL improvements that would take this from good to exceptional."}
+
+**Mix your proposals across these categories:**
+- At least 1 arrangement/structure proposal
+- At least 1 instrumentation/sonic palette proposal
+- At least 1 energy/dynamics proposal
+- At least 1 bold creative idea that surprises
+
+```json
 {{
   "proposals": [
     {{
-      "id": "fix_1",
-      "issue_id": "gap_1",
-      "title": "Short descriptive title",
-      "description": "Musical reasoning for why this fix works",
-      "action": "add_fill | adjust_volume | add_fx | reshape_energy | add_transition",
+      "id": "prop_1",
+      "title": "Crisp, specific title (e.g. 'Strip the drums at bar 24 for a 4-bar breakdown')",
+      "description": "2-3 sentences of musical reasoning. Explain WHY this works, reference techniques from professional tracks when relevant.",
+      "category": "arrangement | instrumentation | dynamics | mix | creative | emotional",
+      "action": "add_element | remove_element | adjust_levels | add_fx | reshape_energy | restructure_section | add_transition",
       "params": {{
-        "stem": "bass",
-        "type": "pad_swell",
-        "bars": [16, 17],
-        "volume_db": -6
+        "stems_affected": ["drums"],
+        "bars": [24, 25, 26, 27],
+        "details": "Ultra-specific implementation instructions"
       }},
-      "confidence": 0.85,
+      "confidence": 0.9,
       "impact": "high"
     }}
   ],
-  "overall_assessment": "Brief assessment of the track's current state and potential"
+  "overall_assessment": "3-4 sentences: What makes this track work, what's holding it back, and what it could become with the right changes.",
+  "track_strengths": ["Be specific — 'Great kick-bass relationship in the drop' not just 'good bass'"],
+  "improvement_priority": "The single most impactful change to make first, and why it unlocks everything else"
 }}
+```
 
-Be creative but practical. Think like a professional producer. Each proposal should be something that can realistically improve the track."""
+**CRITICAL CONSTRAINTS:**
+- `stems_affected` must ONLY contain: "drums", "bass", "vocals", "other"
+- Every proposal must reference specific bar numbers from the analysis
+- Descriptions must explain the MUSICAL reason, not just the technical action
+- Be bold. A safe, generic review is worthless. Give the artist something they haven't thought of."""
 
     try:
         ai_response = generate(
             prompt=prompt,
             system_prompt=(
-                "You are AURALIS AI Critic — an expert music producer that analyzes tracks "
-                "and proposes specific improvements. You think about energy flow, spectral balance, "
-                "arrangement dynamics, and emotional impact. Your proposals are practical and precise."
+                "You are AURALIS — an AI with the musical mind of a Grammy-winning producer, "
+                "the technical precision of a mastering engineer, and the creative vision of an "
+                "avant-garde sound designer. You have 20+ years of experience across electronic music, "
+                "from deep house to techno to melodic bass to ambient. You've worked with artists at "
+                "every level. When you review a track, you don't just hear frequencies — you hear "
+                "potential. You hear what's MISSING, what's HIDING, and what WANTS to emerge. "
+                "Your feedback is specific, bar-referenced, and always rooted in musical reasoning. "
+                "You never give generic advice. Every word you say should make the artist think "
+                "'damn, that's exactly what this track needs.' Respond ONLY with valid JSON."
             ),
             json_mode=True,
             max_tokens=4096,
@@ -2365,9 +2420,13 @@ Be creative but practical. Think like a professional producer. Each proposal sho
         if isinstance(ai_response, dict):
             proposals = ai_response.get("proposals", [])
             assessment = ai_response.get("overall_assessment", "")
+            strengths = ai_response.get("track_strengths", [])
+            priority = ai_response.get("improvement_priority", "")
         else:
             proposals = []
             assessment = str(ai_response)
+            strengths = []
+            priority = ""
 
         return {
             "job_id": job_id,
@@ -2379,6 +2438,8 @@ Be creative but practical. Think like a professional producer. Each proposal sho
             },
             "proposals": proposals,
             "overall_assessment": assessment,
+            "track_strengths": strengths,
+            "improvement_priority": priority,
             "model_used": "gemini-3-pro-preview (with fallback)",
         }
 
