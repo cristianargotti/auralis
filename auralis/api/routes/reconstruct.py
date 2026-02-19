@@ -2671,21 +2671,20 @@ Be creative, musical, and precise. Think like a professional producer who unders
         )
 
         if isinstance(ai_plan, dict) and not ai_plan.get("parse_error"):
-            plan_title = ai_plan.get("plan_title", "AI Improvement")
-            understanding = ai_plan.get("understanding", "")
-            changes = ai_plan.get("changes", [])
-            mixing = ai_plan.get("mixing_adjustments", {})
-            expected = ai_plan.get("expected_result", "")
-
-            _log(job, f"📋 Plan: {plan_title}", "success")
-            _log(job, f"💡 Understanding: {understanding}", "info")
-            _log(job, f"🔧 {len(changes)} changes planned", "info")
-            for c in changes:
+            _log(job, f"📋 Plan: {ai_plan.get('plan_title', 'AI Improvement')}", "success")
+            _log(job, f"💡 Understanding: {ai_plan.get('understanding', '')}", "info")
+            for c in ai_plan.get("changes", []):
                 _log(job, f"  → {c.get('section', '?')}: {', '.join(m.get('description', '') for m in c.get('modifications', []))}", "info")
-            _log(job, f"🎯 Expected: {expected}", "info")
+            _log(job, f"🎯 Expected: {ai_plan.get('expected_result', '')}", "info")
         else:
             ai_plan = {"changes": [], "mixing_adjustments": {}, "plan_title": "Improvement", "understanding": feedback}
             _log(job, "⚠️ Gemini response wasn't structured — will apply general improvements", "warning")
+
+        # Always extract from ai_plan — guaranteed to exist in both branches
+        changes = ai_plan.get("changes", [])
+        mixing = ai_plan.get("mixing_adjustments", {})
+        expected = ai_plan.get("expected_result", feedback)
+        _log(job, f"🔧 {len(changes)} changes planned", "info")
 
         job["stages"]["brain"]["status"] = "completed"
         job["stages"]["brain"]["message"] = ai_plan.get("plan_title", "Plan ready")
