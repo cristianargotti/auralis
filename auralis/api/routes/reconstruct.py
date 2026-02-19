@@ -3468,6 +3468,12 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
 
                         elif mod_type == "pitch_shift":
                             semitones = float(params.get("semitones", 0))
+                            # Clamp vocal pitch shift to ±2st (beyond that = feedback/chipmunk)
+                            # Non-vocal stems allow ±12st for creative FX
+                            max_shift = 2.0 if stem_name == "vocals" else 12.0
+                            if abs(semitones) > max_shift:
+                                _log(job, f"  ⚠️ Clamping pitch shift from {semitones:+.0f} to {max_shift * (1 if semitones > 0 else -1):+.0f}st on {stem_name}", "warning")
+                                semitones = max(-max_shift, min(max_shift, semitones))
                             if semitones != 0:
                                 for ch in range(y.shape[0]):
                                     y[ch, start_sample:end_sample] = librosa.effects.pitch_shift(
@@ -3712,6 +3718,17 @@ Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, lea
         job["progress"] = 100
         job["status"] = "completed"
         job["stage"] = "complete"
+
+        # ── Save analysis.json so frontend can load Track DNA, QC, Verdict ──
+        # The frontend's /analysis/{project_id} endpoint reads this file.
+        # Without it, the QC 12-dim, Track DNA, Energy Map, and Verdict won't render.
+        analysis_out = project_dir / "analysis.json"
+        try:
+            import json as json_mod
+            analysis_out.write_text(json_mod.dumps(analysis, indent=2, default=str))
+            _log(job, "📊 Analysis saved for UI", "info")
+        except Exception as e:
+            _log(job, f"⚠️ Could not save analysis.json: {e}", "warning")
 
         # Build result
         files_info = {}
