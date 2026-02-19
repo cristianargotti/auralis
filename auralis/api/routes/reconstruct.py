@@ -2694,6 +2694,13 @@ For atmospheric/ambient layers. params: `prompt` (descriptive), `volume` (0-1)
     "stem_levels": {{ "drums": 0.0, "bass": 0.0, "vocals": 0.0, "other": 0.0 }},
     "master_processing": "Any changes to the master chain"
   }},
+
+  IMPORTANT about mixing_adjustments.stem_levels:
+  - These are GLOBAL mix-level dB adjustments applied to the ENTIRE track
+  - Range: -6.0 to +6.0 dB ONLY. Use 0.0 for no change
+  - Do NOT use extreme values like -99 to mute — use the "arrangement" mod_type with action "mute" in the changes array instead
+  - stem_levels are for subtle balance tweaks, NOT for muting or silencing stems
+  - If you want to mute a stem for specific bars, use a change with mod_type="arrangement", NOT stem_levels
   "expected_result": "What the user should hear differently"
 }}
 
@@ -3387,6 +3394,8 @@ You can apply AS MANY modifications as needed per section. Use multiple changes 
                                     _log(job, f"  ✅ Generated layer mixed into {stem_name}", "success")
                                 else:
                                     _log(job, f"  ⚠️ Generation failed for '{gen_prompt[:30]}'", "warning")
+                            else:
+                                _log(job, f"  ⚠️ SKIPPED generate (Replicate unavailable): {desc[:60]}", "warning")
 
                         elif mod_type == "texture":
                             # Generate atmospheric texture via Replicate
@@ -3410,6 +3419,8 @@ You can apply AS MANY modifications as needed per section. Use multiple changes 
                                     mix_vol = float(params.get("volume", 0.3))
                                     y[:, start_sample:end_sample] += tex_audio * mix_vol
                                     _log(job, f"  ✅ Texture mixed into {stem_name}", "success")
+                            else:
+                                _log(job, f"  ⚠️ SKIPPED texture (Replicate unavailable): {desc[:60]}", "warning")
 
                     # Save modified stem
                     output = y.squeeze()
@@ -3455,6 +3466,9 @@ You can apply AS MANY modifications as needed per section. Use multiple changes 
 
                     # Apply AI-decided stem level adjustment
                     level_db = float(stem_levels.get(stem_name, 0.0))
+                    # SAFETY: Clamp to ±12dB to prevent accidental muting/distortion
+                    # Gemini sometimes uses -99dB to "mute" which destroys the entire stem
+                    level_db = max(-12.0, min(12.0, level_db))
                     if level_db != 0:
                         y_stem *= 10 ** (level_db / 20.0)
                         _log(job, f"  🎚️ {stem_name}: {'+' if level_db > 0 else ''}{level_db:.1f}dB", "info")
