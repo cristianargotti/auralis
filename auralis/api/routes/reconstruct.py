@@ -2675,6 +2675,30 @@ For atmospheric/ambient layers. params: `prompt` (descriptive), `volume` (0-1)
   "expected_result": "What the user should hear differently"
 }}
 
+## CREATIVE FREEDOM — Section Redesign
+You are not limited to tweaking parameters. You have FULL CREATIVE CONTROL to redesign entire sections.
+You can COMBINE multiple operations on the same section to completely transform it.
+
+### Redesign Patterns
+Think like a top producer. Here are composition-level patterns you can use:
+
+**Redesign an Intro:**
+- Mute drums bars 1-4 → fade_in drums bars 5-8 → shimmer_reverb on other bars 1-8 → filter_sweep highpass 200→8000Hz on other bars 1-8 → generate "ambient atmospheric pad texture" bars 1-8
+
+**Create a Tension Build:**
+- pitch_riser on other → filter_sweep lowpass opening → volume +3dB progressive → sidechain on bass → generate "white noise riser" → tape_stop at the last beat before drop
+
+**Redesign a Transition:**
+- fade_out current section stems → tape_stop on drums → shimmer_reverb with long tail on other → mute bass for 2 bars → generate "impact hit, cinematic, {analysis.get('bpm', 120)}bpm" → fade_in new section stems
+
+**Breakdown Transformation:**
+- mute drums → pitch_shift other -5 semitones → stereo_width 0.5 (narrow) → shimmer_reverb 6s decay → volume -4dB on bass → generate "ethereal vocal chop, atmospheric, {analysis.get('bpm', 120)}bpm"
+
+**Drop Enhancement:**
+- stereo_width 1.8 (wide) → sidechain 0.85 on bass → compressor (punch) on drums → distortion tube on bass → filter sweep lowpass slam open
+
+You can apply AS MANY modifications as needed per section. Use multiple changes targeting the same or overlapping bar ranges. Don't be conservative — be bold and creative.
+
 ## CRITICAL RULES
 - The ONLY valid stem names are: "drums", "bass", "vocals", "other"
 - "other" = ALL melodic/harmonic: synths, pads, keys, guitars, leads, FX
@@ -2682,15 +2706,19 @@ For atmospheric/ambient layers. params: `prompt` (descriptive), `volume` (0-1)
 - Be precise: if the section is a breakdown, use longer reverb decay. If it's a drop, use shorter, punchier settings
 - Don't use generic values — think about what a top producer would set for THIS specific track
 - For "generate" type: write the prompt as if describing the sound to a musician (e.g. "Tribal woodblock pattern, syncopated, {analysis.get('bpm', 120)}bpm, dry")
+- You CAN redesign entire sections — don't just add effects, RETHINK the arrangement if the feedback calls for it
+- Use multiple modifications per change when sections need comprehensive transformation
 """
 
         ai_plan = gemini_generate(
             prompt=improvement_prompt,
             system_prompt=(
-                "You are AURALIS AI Producer — an expert music producer that improves tracks "
-                "based on user feedback. You understand musical theory, arrangement, mixing, "
-                "and sound design. Your improvements are creative, precise, and always serve "
-                "the user's artistic vision. Use the DNA reference profile to maintain style consistency."
+                "You are AURALIS AI Producer — a world-class music producer and sound designer. "
+                "You don't just tweak — you REDESIGN. You have full creative freedom to transform "
+                "any section of the track. You can mute elements, generate new ones, reshape transitions, "
+                "and build entirely new sonic narratives. Your decisions are bold, musical, and precise. "
+                "Every parameter you choose is intentional — driven by the track's BPM, genre, energy, "
+                "and the user's artistic vision. Think at the compositional level, not just the mixing level."
             ),
             json_mode=True,
             max_tokens=4096,
