@@ -50,6 +50,24 @@ class ReconstructRequest(BaseModel):
     separator: str = "auto"
 
 
+class CreateRequest(BaseModel):
+    """Request to create a track from a text description (no upload needed)."""
+
+    description: str  # "Dark melodic techno, 128 BPM, Am, haunting lead synth"
+    genre: str = "auto"  # let AI decide or force: house, techno, ambient, pop, hip_hop
+    bpm: float | None = None  # let AI decide or force
+    key: str | None = None  # e.g. "C", "A", "F#"
+    scale: str | None = None  # e.g. "minor", "major", "dorian"
+    reference_ids: list[str] = []  # optional reference project IDs for DNA cloning
+
+
+class ImproveRequest(BaseModel):
+    """Request to improve an existing track based on user feedback."""
+
+    feedback: str  # "Make the intro more atmospheric", "Heavier bass in the drop"
+
+
+
 # ── Persistence ─────────────────────────────────────────
 
 JOBS_FILE = settings.projects_dir / "jobs.json"
@@ -308,6 +326,64 @@ async def start_reconstruction(req: ReconstructRequest) -> dict[str, Any]:
 
 
 
+
+
+@router.get("/jobs")
+async def list_jobs():
+    """List all reconstruct jobs with project details for the Projects page."""
+    items = []
+    for jid, j in _reconstruct_jobs.items():
+        result = j.get("result") or {}
+        files = result.get("files") or {}
+        analysis = result.get("analysis") or j.get("analysis") or {}
+
+        # Disk size from project dir
+        project_id = j.get("project_id", jid)
+        project_dir = Path("/app/projects") / project_id
+        disk_bytes = 0
+        file_count = 0
+        if project_dir.exists():
+            for f in project_dir.rglob("*"):
+                if f.is_file():
+                    try:
+                        disk_bytes += f.stat().st_size
+                        file_count += 1
+                    except OSError:
+                        pass
+
+        # QC data
+        qc = result.get("qc") or {}
+
+        items.append({
+            "job_id": jid,
+            "project_id": project_id,
+            "original_name": j.get("original_name", "Untitled"),
+            "status": j.get("status", "unknown"),
+            "mode": j.get("mode", "full"),
+            "stage": j.get("stage", ""),
+            "progress": j.get("progress", 0),
+            "parent_job_id": j.get("parent_job_id"),
+            "feedback": j.get("feedback"),
+            "cleaned": disk_bytes == 0 and j.get("status") == "completed",
+            "disk_size_mb": round(disk_bytes / (1024 * 1024), 1),
+            "file_count": file_count,
+            "created_at": j.get("created_at"),
+            "has_master": bool(files.get("master")),
+            "has_mix": bool(files.get("mix")),
+            "has_original": bool(files.get("original")),
+            "has_stems": bool(files.get("stems")),
+            "has_brain": bool(j.get("brain_plan")),
+            "has_stem_analysis": bool(analysis.get("stems")),
+            "bpm": analysis.get("bpm"),
+            "key": analysis.get("key"),
+            "scale": analysis.get("scale"),
+            "duration": analysis.get("duration"),
+            "qc_score": qc.get("score"),
+            "qc_passed": qc.get("passed"),
+        })
+    # Most recent first (dict preserves insertion order in Python 3.7+)
+    items.reverse()
+    return {"jobs": items, "total": len(items)}
 
 
 @router.get("/status/{job_id}")
@@ -579,8 +655,12 @@ def _generate_spectrogram(audio_path: str, output_path: str) -> str:
 
 
 @router.delete("/cleanup/{job_id}")
-async def cleanup_project(job_id: str):
-    """Delete all project files + temp files to free disk space. Keeps job metadata."""
+async def cleanup_project(job_id: str, force: bool = False):
+    """Delete project files to free disk space.
+
+    By default, preserves stems and master/mix WAV files so Directed Improve
+    still works.  Pass ?force=true to delete everything (called from Projects page).
+    """
     if job_id not in _reconstruct_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -590,13 +670,32 @@ async def cleanup_project(job_id: str):
 
     freed_bytes = 0
 
-    # 1. Delete project directory (original, stems, master, spectrograms)
     if project_dir.exists():
-        freed_bytes += sum(
-            f.stat().st_size for f in project_dir.rglob("*") if f.is_file()
-        )
-        import shutil
-        shutil.rmtree(project_dir, ignore_errors=True)
+        if force:
+            # Full delete — removes everything
+            freed_bytes += sum(
+                f.stat().st_size for f in project_dir.rglob("*") if f.is_file()
+            )
+            import shutil
+            shutil.rmtree(project_dir, ignore_errors=True)
+        else:
+            # Soft cleanup — keep stems, master, mix, original
+            keep_patterns = {"master.wav", "mix.wav", "original.wav"}
+            keep_dirs = {"stems"}
+            for f in project_dir.iterdir():
+                if f.name in keep_patterns:
+                    continue
+                if f.is_dir() and f.name in keep_dirs:
+                    continue
+                if f.is_file():
+                    freed_bytes += f.stat().st_size
+                    f.unlink(missing_ok=True)
+                elif f.is_dir():
+                    import shutil
+                    freed_bytes += sum(
+                        sf.stat().st_size for sf in f.rglob("*") if sf.is_file()
+                    )
+                    shutil.rmtree(f, ignore_errors=True)
 
     # 2. Clean /tmp uploads and stale audio temp files
     import shutil
@@ -1050,10 +1149,10 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                 analysis = {"error": str(e)}
                 _log(job, f"Profiler error: {e}", "error")
 
-            # Run MIDI extraction on tonal stems
+            # Run MIDI extraction on tonal stems (hybrid: ONNX → Replicate → pyin)
             if stems_dir.exists() and any(stems_dir.glob("*.wav")):
                 job["stages"]["ear"]["message"] = "Extracting MIDI from stems..."
-                _log(job, "Extracting MIDI from tonal stems (basic-pitch)...")
+                _log(job, "Extracting MIDI from tonal stems (ONNX → Replicate → pyin)...")
                 try:
                     midi_dir = project_dir / "midi"
                     analysis["midi_stems"] = await asyncio.to_thread(
@@ -1062,13 +1161,21 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
                         stems_dir=stems_dir,
                         output_dir=midi_dir,
                     )
-                    _log(job, f"✓ MIDI extracted from {len(analysis['midi_stems'])} stems", "success")
+                    # Report which methods were used
+                    methods_used = set()
+                    for stem_data in analysis["midi_stems"].values():
+                        if hasattr(stem_data, "get"):
+                            methods_used.add(stem_data.get("method", "unknown"))
+                        elif hasattr(stem_data, "method"):
+                            methods_used.add(stem_data.method)
+                    methods_str = ", ".join(methods_used) if methods_used else "unknown"
+                    _log(job, f"✓ MIDI extracted from {len(analysis['midi_stems'])} stems via {methods_str}", "success")
                 except ImportError:
-                    analysis["midi_stems"] = {"error": "basic-pitch not installed"}
-                    _log(job, "basic-pitch not installed — skipping MIDI", "warn")
+                    analysis["midi_stems"] = {}
+                    _log(job, "ℹ️ MIDI extraction skipped (optional dependency)", "info")
                 except Exception as e:
-                    analysis["midi_stems"] = {"error": str(e)}
-                    _log(job, f"MIDI extraction error: {e}", "error")
+                    analysis["midi_stems"] = {}
+                    _log(job, f"ℹ️ MIDI extraction skipped: {e}", "info")
 
             # Free separation result reference
             stem_paths = None
@@ -1744,6 +1851,1109 @@ async def _run_reconstruction(job_id: str, req: ReconstructRequest) -> None:
         _save_jobs()  # persist error state
     finally:
         gc.collect()  # ensure cleanup regardless of outcome
+
+
+# ── TEXT-TO-TRACK CREATION ──────────────────────────────────────
+
+
+@router.post("/create")
+async def create_track(req: CreateRequest) -> dict[str, Any]:
+    """Create a brand-new track from a text description — no upload needed.
+
+    Uses Gemini Brain to generate a production plan, then renders the full track
+    through the Grid → Hands → Console pipeline.
+    """
+    job_id = str(uuid.uuid4())
+    project_dir = settings.projects_dir / job_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Enrich the description with forced parameters
+    enriched = req.description
+    if req.genre != "auto":
+        enriched += f". Genre: {req.genre}"
+    if req.bpm is not None:
+        enriched += f". BPM: {req.bpm}"
+    if req.key is not None:
+        enriched += f". Key: {req.key}"
+    if req.scale is not None:
+        enriched += f". Scale: {req.scale}"
+
+    _reconstruct_jobs[job_id] = {
+        "job_id": job_id,
+        "project_id": job_id,
+        "mode": "create",
+        "status": "running",
+        "stage": "brain",
+        "progress": 0,
+        "stages": {
+            "brain": {"status": "running", "message": "Generating production plan with Gemini..."},
+            "grid": {"status": "pending", "message": ""},
+            "hands": {"status": "pending", "message": ""},
+            "console": {"status": "pending", "message": ""},
+        },
+        "logs": [],
+        "result": None,
+        "description": req.description,
+    }
+    _log(_reconstruct_jobs[job_id], f"🎨 Creating track from description: {req.description[:100]}...", "info")
+    _log(_reconstruct_jobs[job_id], f"Parameters: genre={req.genre}, bpm={req.bpm}, key={req.key}, scale={req.scale}", "info")
+
+    asyncio.create_task(_run_creation(job_id, enriched, project_dir, req.reference_ids))
+    _save_jobs()
+
+    return _reconstruct_jobs[job_id]
+
+
+async def _run_creation(job_id: str, description: str, project_dir: Path, reference_ids: list[str]) -> None:
+    """Run the full text-to-track creation pipeline in background."""
+    job = _reconstruct_jobs[job_id]
+
+    try:
+        import gc
+
+        # Collect reference paths — auto-load ALL from DNA bank if none specified
+        reference_paths: list[Path] = []
+
+        if reference_ids:
+            # Use specific references requested
+            for ref_id in reference_ids:
+                ref_dir = settings.projects_dir / ref_id
+                if ref_dir.exists():
+                    audio = _find_audio_file(ref_dir)
+                    if audio:
+                        reference_paths.append(audio)
+                        _log(job, f"Using reference: {audio.name}", "info")
+        else:
+            # Auto-load ALL references from the DNA bank
+            _log(job, "🧬 Loading DNA references for style cloning...", "info")
+            from auralis.ear.reference_bank import ReferenceBank
+            bank = ReferenceBank(settings.projects_dir)
+            all_refs = bank.list_references()
+            for ref in all_refs:
+                ref_dir = settings.projects_dir / ref.get("track_id", "")
+                if ref_dir.exists():
+                    audio = _find_audio_file(ref_dir)
+                    if audio:
+                        reference_paths.append(audio)
+                        _log(job, f"🎵 DNA ref: {ref.get('name', audio.name)}", "info")
+
+            if reference_paths:
+                _log(job, f"Loaded {len(reference_paths)} DNA references — cloning sonic identity", "success")
+            else:
+                _log(job, "⚠️ No DNA references found — generating with synth defaults", "warning")
+
+        # ── Step 1: Brain — Generate Production Plan with Gemini ──
+        job["stages"]["brain"]["status"] = "running"
+        job["stages"]["brain"]["message"] = "Gemini 3 Pro generating production plan..."
+        _log(job, "🧠 Brain: Asking Gemini 3 Pro to create a production plan...", "stage")
+
+        from auralis.brain.agent import generate_production_plan, BrainConfig
+        plan = generate_production_plan(description, BrainConfig())
+
+        _log(job, f"Plan: {plan.title} | {plan.genre} | {plan.bpm} BPM | {plan.key} {plan.scale}", "success")
+        _log(job, f"Structure: {' → '.join(plan.structure)}", "info")
+        job["stages"]["brain"]["status"] = "completed"
+        job["stages"]["brain"]["message"] = f"Plan: {plan.title}"
+        job["progress"] = 20
+
+        # ── Step 2: Grid — Generate Arrangement ──
+        job["stages"]["grid"]["status"] = "running"
+        job["stages"]["grid"]["message"] = "Creating arrangement..."
+        job["stage"] = "grid"
+        _log(job, "📐 Grid: Generating arrangement from plan...", "stage")
+
+        from auralis.grid.arrangement import ArrangementConfig, generate_arrangement, arrangement_summary
+        arr_config = ArrangementConfig(
+            key=plan.key,
+            scale=plan.scale,
+            bpm=plan.bpm,
+            structure=plan.structure,
+            genre=plan.genre if plan.genre in ("house", "techno", "ambient", "pop", "hip_hop") else "house",
+        )
+        arrangement = generate_arrangement(arr_config)
+        arr_info = arrangement_summary(arrangement)
+
+        _log(job, f"Arrangement: {arrangement.total_bars} bars, {len(arrangement.sections)} sections", "success")
+        job["stages"]["grid"]["status"] = "completed"
+        job["stages"]["grid"]["message"] = f"{arrangement.total_bars} bars"
+        job["progress"] = 35
+
+        # ── Step 3: Hands — Render all stems ──
+        job["stages"]["hands"]["status"] = "running"
+        job["stages"]["hands"]["message"] = "Rendering stems..."
+        job["stage"] = "hands"
+        _log(job, "🎹 Hands: Rendering stems with synth engine...", "stage")
+
+        from auralis.brain.production_ai import render_track, RenderProgress
+
+        def on_progress(p: RenderProgress) -> None:
+            _log(job, f"[{p.stage}] {p.message}", "info")
+            if p.stage == "hands":
+                job["progress"] = 35 + int(p.progress * 40)
+            elif p.stage == "mix":
+                job["progress"] = 75 + int(p.progress * 15)
+
+        track_render = render_track(
+            description=description,
+            output_dir=project_dir,
+            on_progress=on_progress,
+            reference_paths=[str(p) for p in reference_paths] if reference_paths else None,
+        )
+
+        _log(job, f"Rendered {len(track_render.stems)} stems", "success")
+        job["stages"]["hands"]["status"] = "completed"
+        job["stages"]["hands"]["message"] = f"{len(track_render.stems)} stems"
+        job["progress"] = 85
+
+        # ── Step 4: Console — copy mix as master ──
+        job["stages"]["console"]["status"] = "running"
+        job["stages"]["console"]["message"] = "Finalizing master..."
+        job["stage"] = "console"
+
+        import shutil
+        mix_path = Path(track_render.output_path)
+        master_path = project_dir / "master.wav"
+        if mix_path.exists() and not master_path.exists():
+            shutil.copy2(mix_path, master_path)
+        elif mix_path.exists():
+            master_path = mix_path
+
+        _log(job, f"Master ready: {master_path.name}", "success")
+        job["stages"]["console"]["status"] = "completed"
+        job["stages"]["console"]["message"] = "Master ready"
+        job["progress"] = 100
+
+        # ── Build result ──
+        files = {
+            "master": str(master_path) if master_path.exists() else None,
+            "mix": str(mix_path) if mix_path.exists() else None,
+        }
+        # Add stems
+        stems_dir = project_dir / "stems"
+        if not stems_dir.exists():
+            stems_dir.mkdir(parents=True, exist_ok=True)
+        for stem_name, stem_path in track_render.stems.items():
+            stem_file = Path(stem_path)
+            if stem_file.exists():
+                # Copy stems to standard location
+                target = stems_dir / f"{stem_name}.wav"
+                if not target.exists():
+                    shutil.copy2(stem_file, target)
+                files[f"stem_{stem_name}"] = str(target)
+
+        job["status"] = "completed"
+        job["result"] = {
+            "analysis": {
+                "bpm": plan.bpm,
+                "key": plan.key,
+                "scale": plan.scale,
+                "duration": track_render.duration_s,
+                "sections_detected": len(arrangement.sections),
+            },
+            "plan": {
+                "title": plan.title,
+                "genre": plan.genre,
+                "mood": plan.mood,
+                "energy": plan.energy,
+                "structure": plan.structure,
+                "description": plan.description,
+            },
+            "rendered_stems": len(track_render.stems),
+            "stem_analysis": {},
+            "brain_report": {
+                "reasoning_chain": [f"Created with Gemini 3 Pro: {plan.description}"],
+                "interaction_log": [f"Description: {description}"],
+            },
+            "files": files,
+        }
+
+        _log(job, f"✅ Track created: {plan.title} ({plan.genre}, {plan.bpm} BPM, {plan.key} {plan.scale})", "success")
+        _save_jobs()
+        gc.collect()
+
+    except Exception as e:
+        import traceback
+        _log(job, f"❌ Creation failed: {e}", "error")
+        _log(job, traceback.format_exc()[-500:], "error")
+        job["status"] = "error"
+        job["result"] = {"error": str(e)}
+        _save_jobs()
+
+
+# ── AI CRITIC — Diagnose + Propose ──────────────────────────────
+
+
+@router.post("/diagnose/{job_id}")
+async def diagnose_track(job_id: str):
+    """Analyze a completed track bar-by-bar to detect energy gaps, silences, and spectral issues.
+
+    Returns a list of issues with bar positions, severity, and affected stems.
+    """
+    job = _reconstruct_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.get("status") != "completed":
+        raise HTTPException(400, "Job must be completed before diagnosis")
+
+    result = job.get("result", {})
+    analysis = result.get("analysis", {})
+    bpm = float(analysis.get("bpm", 120.0))
+    duration = float(analysis.get("duration", 180.0))
+    key = str(analysis.get("key", "C"))
+    scale = str(analysis.get("scale", "minor"))
+
+    # Calculate bar timing
+    bar_duration = (60.0 / bpm) * 4  # 4 beats per bar
+    total_bars = int(duration / bar_duration)
+
+    project_dir = settings.projects_dir / job_id
+
+    # ── Per-bar energy analysis across all stems + master ──
+    import librosa
+
+    energy_map: dict[str, list[float]] = {}
+    stem_names = ["drums", "bass", "vocals", "other"]
+
+    # Analyze master first
+    master_path = project_dir / "master.wav"
+    mix_path = project_dir / "mix.wav"
+    main_audio = master_path if master_path.exists() else (mix_path if mix_path.exists() else None)
+
+    if main_audio:
+        try:
+            y, sr = librosa.load(main_audio, sr=22050, mono=True)
+            bar_energies = []
+            for bar in range(total_bars):
+                start_sample = int(bar * bar_duration * sr)
+                end_sample = int((bar + 1) * bar_duration * sr)
+                chunk = y[start_sample:min(end_sample, len(y))]
+                if len(chunk) > 0:
+                    rms = float(np.sqrt(np.mean(chunk ** 2)))
+                    db = float(20 * np.log10(max(rms, 1e-10)))
+                    bar_energies.append(round(db, 1))
+                else:
+                    bar_energies.append(-60.0)
+            energy_map["master"] = bar_energies
+        except Exception:
+            pass
+
+    # Analyze each stem
+    stems_dir = project_dir / "stems"
+    for stem_name in stem_names:
+        stem_path = stems_dir / f"{stem_name}.wav"
+        if not stem_path.exists():
+            continue
+        try:
+            y, sr = librosa.load(stem_path, sr=22050, mono=True)
+            bar_energies = []
+            for bar in range(total_bars):
+                start_sample = int(bar * bar_duration * sr)
+                end_sample = int((bar + 1) * bar_duration * sr)
+                chunk = y[start_sample:min(end_sample, len(y))]
+                if len(chunk) > 0:
+                    rms = float(np.sqrt(np.mean(chunk ** 2)))
+                    db = float(20 * np.log10(max(rms, 1e-10)))
+                    bar_energies.append(round(db, 1))
+                else:
+                    bar_energies.append(-60.0)
+            energy_map[stem_name] = bar_energies
+        except Exception:
+            continue
+
+    # ── Detect issues ──
+    issues: list[dict[str, Any]] = []
+    issue_counter = 0
+
+    master_energy = energy_map.get("master", [])
+
+    for bar in range(total_bars):
+        # Skip first and last bar (naturally quiet)
+        if bar == 0 or bar >= total_bars - 1:
+            continue
+
+        # Calculate surrounding energy for context
+        prev_energy = master_energy[bar - 1] if bar > 0 and master_energy else -30
+        curr_energy = master_energy[bar] if bar < len(master_energy) else -30
+        next_energy = master_energy[bar + 1] if bar + 1 < len(master_energy) else -30
+        avg_context = (prev_energy + next_energy) / 2
+
+        # Detect energy gap: bar significantly quieter than its neighbors
+        energy_drop = avg_context - curr_energy
+        if energy_drop > 6:  # > 6dB drop
+            # Find which stems are responsible
+            affected = []
+            for stem_name in stem_names:
+                stem_e = energy_map.get(stem_name, [])
+                if bar < len(stem_e):
+                    stem_prev = stem_e[bar - 1] if bar > 0 else stem_e[bar]
+                    stem_curr = stem_e[bar]
+                    if stem_prev - stem_curr > 6:
+                        affected.append(stem_name)
+
+            severity = "high" if energy_drop > 12 else ("medium" if energy_drop > 8 else "low")
+            issue_counter += 1
+            issues.append({
+                "id": f"gap_{issue_counter}",
+                "type": "energy_gap",
+                "bar": bar + 1,  # 1-indexed for user
+                "time_start": round(bar * bar_duration, 2),
+                "time_end": round((bar + 1) * bar_duration, 2),
+                "severity": severity,
+                "description": (
+                    f"Energy drops {energy_drop:.1f} dB at bar {bar + 1} "
+                    f"— {'silence' if curr_energy < -40 else 'thin section'} "
+                    f"in {', '.join(affected) if affected else 'overall mix'}"
+                ),
+                "affected_stems": affected if affected else ["master"],
+                "context": {
+                    "energy_before": round(prev_energy, 1),
+                    "energy_at": round(curr_energy, 1),
+                    "energy_after": round(next_energy, 1),
+                    "drop_db": round(energy_drop, 1),
+                },
+            })
+
+        # Detect flat/silent sections
+        if curr_energy < -40:
+            # Check if multiple consecutive bars are silent
+            affected = [s for s in stem_names if bar < len(energy_map.get(s, [])) and energy_map[s][bar] < -40]
+            if len(affected) >= 2:
+                issue_counter += 1
+                issues.append({
+                    "id": f"silence_{issue_counter}",
+                    "type": "silence",
+                    "bar": bar + 1,
+                    "time_start": round(bar * bar_duration, 2),
+                    "time_end": round((bar + 1) * bar_duration, 2),
+                    "severity": "high",
+                    "description": f"Near-silence at bar {bar + 1} — {', '.join(affected)} are quiet",
+                    "affected_stems": affected,
+                    "context": {"energy_at": round(curr_energy, 1)},
+                })
+
+    # Sort issues by severity then bar
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    issues.sort(key=lambda x: (severity_order.get(x["severity"], 3), x["bar"]))
+
+    return {
+        "job_id": job_id,
+        "bpm": bpm,
+        "key": key,
+        "scale": scale,
+        "duration": duration,
+        "total_bars": total_bars,
+        "bar_duration_s": round(bar_duration, 3),
+        "issues": issues,
+        "issue_count": len(issues),
+        "energy_map": energy_map,
+        "stem_analysis_summary": {
+            k: {"avg_db": round(sum(v) / len(v), 1) if v else -60, "bars": len(v)}
+            for k, v in energy_map.items()
+        },
+    }
+
+
+@router.post("/propose/{job_id}")
+async def propose_fixes(job_id: str):
+    """Generate AI-powered fix proposals for diagnosed issues using Gemini 3 Pro.
+
+    Requires a completed diagnosis (call /diagnose first).
+    Returns actionable proposals the user can approve/reject.
+    """
+    # First run diagnosis to get issues
+    diagnosis = await diagnose_track(job_id)
+
+    if diagnosis["issue_count"] == 0:
+        return {
+            "job_id": job_id,
+            "message": "🎉 No issues found — your track sounds solid!",
+            "proposals": [],
+        }
+
+    job = _reconstruct_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found — may have been lost after restart")
+    result = job.get("result", {})
+    analysis = result.get("analysis", {})
+    stem_analysis = result.get("stem_analysis", {})
+    brain_report = result.get("brain_report", {})
+
+    # Build context for Gemini
+    context = {
+        "track_info": {
+            "bpm": diagnosis["bpm"],
+            "key": diagnosis["key"],
+            "scale": diagnosis["scale"],
+            "duration_s": diagnosis["duration"],
+            "total_bars": diagnosis["total_bars"],
+        },
+        "issues": diagnosis["issues"],
+        "energy_map_summary": diagnosis["stem_analysis_summary"],
+        "stem_info": {
+            name: {
+                "rms_db": data.get("rms_db"),
+                "peak_db": data.get("peak_db"),
+                "dynamic_range_db": data.get("dynamic_range"),
+            }
+            for name, data in stem_analysis.items()
+            if isinstance(data, dict) and "error" not in data
+        },
+    }
+
+    # Include brain reasoning if available
+    if brain_report:
+        context["brain_reasoning"] = {
+            "reasoning_chain": brain_report.get("reasoning_chain", [])[:5],
+            "interaction_log": brain_report.get("interaction_log", [])[:5],
+        }
+
+    from auralis.brain.gemini_client import generate
+
+    prompt = f"""You are an expert music producer analyzing a {diagnosis['key']} {diagnosis['scale']} track at {diagnosis['bpm']} BPM.
+
+The track has been analyzed and the following issues were found. For each issue, propose a specific, actionable fix.
+
+## Track Context
+{json.dumps(context, indent=2, default=str)}
+
+## Instructions
+For each issue, generate a proposal with:
+1. A clear title (e.g., "Add pad fill at bar 16")
+2. A description explaining WHY this fix works musically
+3. The specific action to take
+4. Parameters for the fix
+5. Confidence level (0.0-1.0) in this being the right fix
+6. Impact level (high/medium/low)
+
+Respond with this exact JSON structure:
+{{
+  "proposals": [
+    {{
+      "id": "fix_1",
+      "issue_id": "gap_1",
+      "title": "Short descriptive title",
+      "description": "Musical reasoning for why this fix works",
+      "action": "add_fill | adjust_volume | add_fx | reshape_energy | add_transition",
+      "params": {{
+        "stem": "bass",
+        "type": "pad_swell",
+        "bars": [16, 17],
+        "volume_db": -6
+      }},
+      "confidence": 0.85,
+      "impact": "high"
+    }}
+  ],
+  "overall_assessment": "Brief assessment of the track's current state and potential"
+}}
+
+Be creative but practical. Think like a professional producer. Each proposal should be something that can realistically improve the track."""
+
+    try:
+        ai_response = generate(
+            prompt=prompt,
+            system_prompt=(
+                "You are AURALIS AI Critic — an expert music producer that analyzes tracks "
+                "and proposes specific improvements. You think about energy flow, spectral balance, "
+                "arrangement dynamics, and emotional impact. Your proposals are practical and precise."
+            ),
+            json_mode=True,
+            max_tokens=4096,
+            temperature=0.7,
+        )
+
+        if isinstance(ai_response, dict):
+            proposals = ai_response.get("proposals", [])
+            assessment = ai_response.get("overall_assessment", "")
+        else:
+            proposals = []
+            assessment = str(ai_response)
+
+        return {
+            "job_id": job_id,
+            "diagnosis_summary": {
+                "total_issues": diagnosis["issue_count"],
+                "high_severity": sum(1 for i in diagnosis["issues"] if i["severity"] == "high"),
+                "medium_severity": sum(1 for i in diagnosis["issues"] if i["severity"] == "medium"),
+                "low_severity": sum(1 for i in diagnosis["issues"] if i["severity"] == "low"),
+            },
+            "proposals": proposals,
+            "overall_assessment": assessment,
+            "model_used": "gemini-3-pro-preview (with fallback)",
+        }
+
+    except Exception as e:
+        return {
+            "job_id": job_id,
+            "error": f"AI proposal generation failed: {str(e)}",
+            "diagnosis": diagnosis,
+            "proposals": [],
+        }
+
+
+# ── Directed Reconstruct: Improve with AI Feedback ──────
+
+
+@router.post("/improve/{job_id}")
+async def improve_track(job_id: str, req: ImproveRequest):
+    """Improve a completed track based on user feedback.
+
+    The user provides text feedback (e.g. 'make the intro more atmospheric').
+    Gemini analyzes the track + feedback + DNA references → generates an
+    improvement plan → re-renders affected sections → delivers improved master.
+
+    All musical decisions are made by the AI — zero hardcode.
+    """
+    job = _reconstruct_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.get("status") != "completed":
+        raise HTTPException(400, "Job must be completed before improving")
+
+    result = job.get("result", {})
+    analysis = result.get("analysis", {})
+    stem_analysis = result.get("stem_analysis", {})
+
+    if not analysis:
+        raise HTTPException(400, "No analysis data — run the pipeline first")
+
+    # ── Create a new child job for the improvement ──
+    import uuid
+    improve_id = str(uuid.uuid4())
+    project_dir = settings.projects_dir / improve_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    _reconstruct_jobs[improve_id] = {
+        "job_id": improve_id,
+        "project_id": improve_id,
+        "mode": "improve",
+        "parent_job_id": job_id,
+        "status": "running",
+        "stage": "brain",
+        "progress": 0,
+        "stages": {
+            "brain": {"status": "running", "message": "Analyzing your feedback with Gemini..."},
+            "grid": {"status": "pending", "message": ""},
+            "hands": {"status": "pending", "message": ""},
+            "console": {"status": "pending", "message": ""},
+        },
+        "logs": [],
+        "result": None,
+        "feedback": req.feedback,
+        "original_name": job.get("original_name", "Track"),
+    }
+    improve_job = _reconstruct_jobs[improve_id]
+    _log(improve_job, f"🎯 Directed Improve: {req.feedback}", "info")
+    _log(improve_job, f"Based on: {job_id}", "info")
+    _save_jobs()
+
+    # Run improvement in background
+    asyncio.create_task(_run_improvement(
+        improve_id, job_id, req.feedback, project_dir
+    ))
+
+    return _reconstruct_jobs[improve_id]
+
+
+async def _run_improvement(
+    improve_id: str,
+    parent_id: str,
+    feedback: str,
+    project_dir: Path,
+) -> None:
+    """Run the AI-directed improvement pipeline."""
+    job = _reconstruct_jobs[improve_id]
+    parent = _reconstruct_jobs.get(parent_id, {})
+    parent_result = parent.get("result", {})
+    analysis = parent_result.get("analysis", {})
+    stem_analysis = parent_result.get("stem_analysis", {})
+    brain_report = parent_result.get("brain_report", {})
+
+    try:
+        import gc
+
+        # ── Collect DNA reference profile ──
+        _log(job, "🧬 Loading DNA references for style context...", "info")
+        dna_profile = {}
+        reference_paths: list[Path] = []
+        try:
+            from auralis.ear.reference_bank import ReferenceBank
+            bank = ReferenceBank(settings.projects_dir)
+            all_refs = bank.list_references()
+            for ref in all_refs:
+                ref_dir = settings.projects_dir / ref.get("track_id", "")
+                if ref_dir.exists():
+                    audio = _find_audio_file(ref_dir)
+                    if audio:
+                        reference_paths.append(audio)
+            if bank.count() > 0:
+                try:
+                    dna_profile = bank.get_full_averages()
+                    _log(job, f"🎵 {bank.count()} DNA refs loaded for style guidance", "success")
+                except Exception:
+                    dna_profile = {}
+        except Exception as e:
+            _log(job, f"⚠️ DNA refs unavailable: {e}", "warning")
+
+        # ── Step 1: BRAIN — Ask Gemini to analyze feedback + generate plan ──
+        job["stages"]["brain"]["status"] = "running"
+        job["stages"]["brain"]["message"] = "Gemini analyzing your feedback..."
+        _log(job, "🧠 Brain: Sending track analysis + feedback to Gemini...", "stage")
+
+        # Build full context for Gemini
+        track_context = {
+            "bpm": analysis.get("bpm", 120),
+            "key": analysis.get("key", "C"),
+            "scale": analysis.get("scale", "minor"),
+            "duration_s": analysis.get("duration", 180),
+            "genre": analysis.get("genre", "unknown"),
+            "energy_profile": analysis.get("energy_profile", {}),
+            "spectral_summary": {
+                name: {
+                    "rms_db": data.get("rms_db"),
+                    "peak_db": data.get("peak_db"),
+                    "dynamic_range": data.get("dynamic_range"),
+                    "spectral_centroid": data.get("spectral_centroid_mean"),
+                }
+                for name, data in stem_analysis.items()
+                if isinstance(data, dict) and "error" not in data
+            },
+        }
+
+        # Add brain reasoning context if available
+        if brain_report:
+            track_context["brain_reasoning"] = {
+                "reasoning_chain": brain_report.get("reasoning_chain", [])[:5],
+                "key_observations": brain_report.get("interaction_log", [])[:5],
+            }
+
+        # Add DNA reference profile for style cloning
+        if dna_profile:
+            track_context["dna_reference_style"] = {
+                "average_bpm": dna_profile.get("master", {}).get("bpm_avg"),
+                "average_loudness": dna_profile.get("master", {}).get("rms_db_avg"),
+                "style_note": "These are the target reference values the user wants to match",
+            }
+
+        from auralis.brain.gemini_client import generate as gemini_generate
+
+        improvement_prompt = f"""You are AURALIS AI Producer. A user has completed a track and wants specific improvements.
+
+## Original Track Analysis
+{json.dumps(track_context, indent=2, default=str)}
+
+## User's Feedback
+"{feedback}"
+
+## Your Task
+Analyze the track data and the user's feedback. Generate a COMPLETE improvement plan.
+You must decide:
+1. Which sections of the track need changes (by bar range)
+2. What specific modifications to make (effects, volume, EQ, arrangement)
+3. How to re-mix for the best result
+
+Respond with this exact JSON structure:
+{{
+  "understanding": "Your interpretation of what the user wants (1-2 sentences)",
+  "plan_title": "Short name for this improvement (e.g. 'Atmospheric Intro Enhancement')",
+  "changes": [
+    {{
+      "section": "intro | verse | chorus | drop | breakdown | outro | bars_N_to_M",
+      "bar_start": 0,
+      "bar_end": 16,
+      "stems_affected": ["drums", "bass", "vocals", "other"],
+      "modifications": [
+        {{
+          "type": "effect | volume | eq | arrangement | style",
+          "description": "What to do (e.g. 'Add shimmer reverb with long tail')",
+          "params": {{
+            "effect_name": "reverb",
+            "wet_mix": 0.4,
+            "decay": 3.5
+          }}
+        }}
+      ],
+      "reasoning": "Why this change addresses the user's feedback"
+    }}
+  ],
+  "mixing_adjustments": {{
+    "overall_description": "How the final mix should change",
+    "stem_levels": {{
+      "drums": 0.0,
+      "bass": 0.0,
+      "vocals": 0.0,
+      "other": 0.0
+    }},
+    "master_processing": "Any changes to the master chain"
+  }},
+  "expected_result": "What the user should hear differently after these changes"
+}}
+
+CRITICAL: The ONLY valid stem names are: "drums", "bass", "vocals", "other".
+- "other" contains ALL melodic/harmonic elements: synths, pads, keys, guitars, leads, FX, etc.
+- "vocals" contains all vocal content.
+Do NOT use names like "synths", "chords", "melody", "keys" — map them to "other".
+
+Be creative, musical, and precise. Think like a professional producer who understands the user's vision."""
+
+        ai_plan = gemini_generate(
+            prompt=improvement_prompt,
+            system_prompt=(
+                "You are AURALIS AI Producer — an expert music producer that improves tracks "
+                "based on user feedback. You understand musical theory, arrangement, mixing, "
+                "and sound design. Your improvements are creative, precise, and always serve "
+                "the user's artistic vision. Use the DNA reference profile to maintain style consistency."
+            ),
+            json_mode=True,
+            max_tokens=4096,
+            temperature=0.6,
+        )
+
+        if isinstance(ai_plan, dict) and not ai_plan.get("parse_error"):
+            plan_title = ai_plan.get("plan_title", "AI Improvement")
+            understanding = ai_plan.get("understanding", "")
+            changes = ai_plan.get("changes", [])
+            mixing = ai_plan.get("mixing_adjustments", {})
+            expected = ai_plan.get("expected_result", "")
+
+            _log(job, f"📋 Plan: {plan_title}", "success")
+            _log(job, f"💡 Understanding: {understanding}", "info")
+            _log(job, f"🔧 {len(changes)} changes planned", "info")
+            for c in changes:
+                _log(job, f"  → {c.get('section', '?')}: {', '.join(m.get('description', '') for m in c.get('modifications', []))}", "info")
+            _log(job, f"🎯 Expected: {expected}", "info")
+        else:
+            ai_plan = {"changes": [], "mixing_adjustments": {}, "plan_title": "Improvement", "understanding": feedback}
+            _log(job, "⚠️ Gemini response wasn't structured — will apply general improvements", "warning")
+
+        job["stages"]["brain"]["status"] = "completed"
+        job["stages"]["brain"]["message"] = ai_plan.get("plan_title", "Plan ready")
+        job["progress"] = 20
+        _save_jobs()
+
+        # ── Step 2: GRID — Map improvements to arrangement ──
+        job["stages"]["grid"]["status"] = "running"
+        job["stages"]["grid"]["message"] = "Mapping improvements to arrangement..."
+        job["stage"] = "grid"
+        _log(job, "📐 Grid: Mapping AI plan to track sections...", "stage")
+
+        # Copy parent's original audio to child project for re-processing
+        parent_project_id = parent.get("project_id", parent_id)
+        parent_dir = settings.projects_dir / parent_project_id
+        import shutil
+
+        # Validate parent project exists
+        if not parent_dir.exists():
+            raise RuntimeError(
+                f"Parent project directory not found ({parent_id[:8]}…). "
+                "The original track may have been deleted. Please re-upload and reconstruct first."
+            )
+
+        # Copy original audio
+        original_src = parent_dir / "original.wav"
+        if not original_src.exists():
+            original_src = _find_audio_file(parent_dir)
+        if original_src and original_src.exists():
+            shutil.copy2(original_src, project_dir / "original.wav")
+            _log(job, f"📁 Copied original audio from parent project", "info")
+
+        # Copy stems directory for re-mixing
+        parent_stems = parent_dir / "stems"
+        child_stems = project_dir / "stems"
+        if parent_stems.exists():
+            shutil.copytree(parent_stems, child_stems, dirs_exist_ok=True)
+            stem_count = len(list(child_stems.glob("*.wav")))
+            _log(job, f"📁 Copied {stem_count} stems for re-mixing", "info")
+        else:
+            raise RuntimeError(
+                f"Parent project has no stems ({parent_id[:8]}…). "
+                "The stems may have been cleaned up. Please re-upload and reconstruct first."
+            )
+
+        job["stages"]["grid"]["status"] = "completed"
+        job["stages"]["grid"]["message"] = f"{len(changes)} sections to improve"
+        job["progress"] = 35
+        _save_jobs()
+
+        # ── Step 3: HANDS — Apply improvements ──
+        job["stages"]["hands"]["status"] = "running"
+        job["stages"]["hands"]["message"] = "Applying AI improvements..."
+        job["stage"] = "hands"
+        _log(job, "🎹 Hands: Applying Gemini's improvement plan to stems...", "stage")
+
+        import librosa
+        import soundfile as sf
+
+        bpm = float(analysis.get("bpm", 120))
+        sr = 44100
+        bar_duration_s = (60.0 / bpm) * 4  # seconds per bar
+        bar_samples = int(bar_duration_s * sr)
+
+        stems_modified = 0
+        stem_files = list(child_stems.glob("*.wav")) if child_stems.exists() else []
+
+        # Apply changes from the AI plan
+        for change_idx, change in enumerate(changes):
+            bar_start = change.get("bar_start", 0)
+            bar_end = change.get("bar_end", 8)
+            stems_affected = change.get("stems_affected", [])
+            modifications = change.get("modifications", [])
+            section_name = change.get("section", "?")
+
+            _log(job, f"🔧 Processing: {section_name} (bars {bar_start}-{bar_end})", "info")
+
+            for stem_name_raw in stems_affected:
+                # Normalize Gemini's stem names to actual Demucs file names
+                _STEM_MAP = {
+                    "drums": "drums", "drum": "drums", "percussion": "drums", "kick": "drums", "hats": "drums",
+                    "bass": "bass", "sub": "bass", "sub_bass": "bass", "808": "bass",
+                    "vocals": "vocals", "vocal": "vocals", "voice": "vocals", "vox": "vocals",
+                    "other": "other", "synths": "other", "synth": "other", "chords": "other",
+                    "melody": "other", "keys": "other", "piano": "other", "pad": "other",
+                    "pads": "other", "guitar": "other", "lead": "other", "fx": "other",
+                    "strings": "other", "pluck": "other", "organ": "other",
+                }
+                stem_name = _STEM_MAP.get(stem_name_raw.lower(), stem_name_raw.lower())
+
+                # Find the stem file
+                stem_file = child_stems / f"{stem_name}.wav" if child_stems.exists() else None
+                if not stem_file or not stem_file.exists():
+                    _log(job, f"  ⚠️ Stem '{stem_name_raw}' → '{stem_name}.wav' not found, skipping", "warning")
+                    continue
+
+                try:
+                    y, file_sr = librosa.load(str(stem_file), sr=sr, mono=False)
+                    if y.ndim == 1:
+                        y = np.expand_dims(y, 0)
+
+                    start_sample = bar_start * bar_samples
+                    end_sample = min(bar_end * bar_samples, y.shape[-1])
+
+                    if start_sample >= y.shape[-1]:
+                        continue
+
+                    # Apply each modification from the AI plan
+                    for mod in modifications:
+                        mod_type = mod.get("type", "")
+                        params = mod.get("params", {})
+
+                        if mod_type == "effect":
+                            effect_name = params.get("effect_name", "")
+                            wet_mix = float(params.get("wet_mix", 0.3))
+
+                            if "reverb" in effect_name.lower():
+                                # Apply reverb to the section
+                                decay = float(params.get("decay", 2.0))
+                                ir_len = int(decay * sr)
+                                impulse = np.exp(-3.0 * np.linspace(0, 1, ir_len))
+                                impulse = impulse / (np.sum(impulse) + 1e-10)
+                                for ch in range(y.shape[0]):
+                                    segment = y[ch, start_sample:end_sample]
+                                    reverbed = np.convolve(segment, impulse, mode="full")[:len(segment)]
+                                    y[ch, start_sample:end_sample] = (
+                                        segment * (1 - wet_mix) + reverbed * wet_mix
+                                    )
+                                _log(job, f"  ✨ Reverb → {stem_name} (decay={decay}s, wet={wet_mix})", "info")
+
+                            elif "delay" in effect_name.lower():
+                                delay_time = float(params.get("delay_time", 0.25))
+                                delay_feedback = float(params.get("feedback", 0.3))
+                                delay_samples = int(delay_time * sr)
+                                for ch in range(y.shape[0]):
+                                    segment = y[ch, start_sample:end_sample].copy()
+                                    delayed = np.zeros_like(segment)
+                                    if delay_samples < len(segment):
+                                        delayed[delay_samples:] = segment[:-delay_samples] * delay_feedback
+                                    y[ch, start_sample:end_sample] = segment + delayed * wet_mix
+                                _log(job, f"  🔁 Delay → {stem_name} (time={delay_time}s)", "info")
+
+                            elif "filter" in effect_name.lower() or "eq" in effect_name.lower():
+                                # Simple low/high pass
+                                from scipy import signal as scipy_signal
+                                cutoff = float(params.get("cutoff", 2000))
+                                filter_type = params.get("filter_type", "lowpass")
+                                try:
+                                    nyq = sr / 2
+                                    norm_cutoff = min(cutoff / nyq, 0.99)
+                                    b, a = scipy_signal.butter(4, norm_cutoff, btype=filter_type)
+                                    for ch in range(y.shape[0]):
+                                        segment = y[ch, start_sample:end_sample]
+                                        filtered = scipy_signal.filtfilt(b, a, segment)
+                                        y[ch, start_sample:end_sample] = (
+                                            segment * (1 - wet_mix) + filtered * wet_mix
+                                        )
+                                    _log(job, f"  🎛️ {filter_type} filter → {stem_name} (cutoff={cutoff}Hz)", "info")
+                                except Exception:
+                                    pass
+
+                            elif "distortion" in effect_name.lower() or "saturation" in effect_name.lower():
+                                drive = float(params.get("drive", 2.0))
+                                for ch in range(y.shape[0]):
+                                    segment = y[ch, start_sample:end_sample]
+                                    y[ch, start_sample:end_sample] = np.tanh(segment * drive) / drive
+                                _log(job, f"  🔥 Saturation → {stem_name} (drive={drive}x)", "info")
+
+                        elif mod_type == "volume":
+                            db_change = float(params.get("db", 0))
+                            if db_change != 0:
+                                gain = 10 ** (db_change / 20.0)
+                                y[:, start_sample:end_sample] *= gain
+                                _log(job, f"  📊 Volume {'+' if db_change > 0 else ''}{db_change}dB → {stem_name}", "info")
+
+                        elif mod_type == "arrangement":
+                            action = params.get("action", "")
+                            if action == "mute":
+                                y[:, start_sample:end_sample] *= 0.0
+                                _log(job, f"  🔇 Muted {stem_name} bars {bar_start}-{bar_end}", "info")
+                            elif action == "fade_in":
+                                length = end_sample - start_sample
+                                fade = np.linspace(0, 1, length)
+                                y[:, start_sample:end_sample] *= fade
+                                _log(job, f"  📈 Fade-in → {stem_name}", "info")
+                            elif action == "fade_out":
+                                length = end_sample - start_sample
+                                fade = np.linspace(1, 0, length)
+                                y[:, start_sample:end_sample] *= fade
+                                _log(job, f"  📉 Fade-out → {stem_name}", "info")
+
+                    # Save modified stem
+                    output = y.squeeze()
+                    sf.write(str(stem_file), output.T if output.ndim > 1 else output, sr)
+                    stems_modified += 1
+
+                except Exception as e:
+                    _log(job, f"  ⚠️ Error processing {stem_name}: {e}", "warning")
+
+            job["progress"] = 35 + int((change_idx + 1) / max(len(changes), 1) * 40)
+
+        _log(job, f"✅ Modified {stems_modified} stems", "success")
+        job["stages"]["hands"]["status"] = "completed"
+        job["stages"]["hands"]["message"] = f"{stems_modified} stems improved"
+        job["progress"] = 80
+        _save_jobs()
+        gc.collect()
+
+        # ── Step 4: CONSOLE — Re-mix and master ──
+        job["stages"]["console"]["status"] = "running"
+        job["stages"]["console"]["message"] = "Re-mixing and mastering..."
+        job["stage"] = "console"
+        _log(job, "🎚️ Console: Re-mixing stems with AI adjustments...", "stage")
+
+        # Apply mixing adjustments from the AI plan
+        mixing_adj = ai_plan.get("mixing_adjustments", {})
+        stem_levels = mixing_adj.get("stem_levels", {})
+
+        # Mix all stems together
+        all_stems = list(child_stems.glob("*.wav")) if child_stems.exists() else []
+        if all_stems:
+            # Load all stems
+            mixed = None
+            max_len = 0
+
+            for stem_file in all_stems:
+                try:
+                    y_stem, _ = librosa.load(str(stem_file), sr=sr, mono=True)
+                    stem_name = stem_file.stem
+
+                    # Apply AI-decided stem level adjustment
+                    level_db = float(stem_levels.get(stem_name, 0.0))
+                    if level_db != 0:
+                        y_stem *= 10 ** (level_db / 20.0)
+                        _log(job, f"  🎚️ {stem_name}: {'+' if level_db > 0 else ''}{level_db:.1f}dB", "info")
+
+                    if mixed is None:
+                        mixed = y_stem.copy()
+                        max_len = len(y_stem)
+                    else:
+                        # Pad shorter array
+                        if len(y_stem) > max_len:
+                            mixed = np.pad(mixed, (0, len(y_stem) - max_len))
+                            max_len = len(y_stem)
+                        elif len(y_stem) < max_len:
+                            y_stem = np.pad(y_stem, (0, max_len - len(y_stem)))
+                        mixed += y_stem
+                except Exception as e:
+                    _log(job, f"  ⚠️ Error mixing {stem_file.name}: {e}", "warning")
+
+            if mixed is not None:
+                # Normalize to prevent clipping
+                peak = np.max(np.abs(mixed))
+                if peak > 0.95:
+                    mixed = mixed * 0.95 / peak
+                    _log(job, f"  📊 Normalized peak to -0.5dB", "info")
+
+                # Save mix
+                mix_path = project_dir / "mix.wav"
+                sf.write(str(mix_path), mixed, sr)
+                _log(job, f"💿 Mix saved: {mix_path.name}", "success")
+
+                # Simple mastering: gentle compression + limiter
+                # Soft-knee compressor
+                threshold = 0.5
+                ratio = 3.0
+                above = np.abs(mixed) > threshold
+                mixed[above] = np.sign(mixed[above]) * (
+                    threshold + (np.abs(mixed[above]) - threshold) / ratio
+                )
+                # Final limiter
+                peak = np.max(np.abs(mixed))
+                if peak > 0:
+                    mixed = mixed * 0.92 / peak
+
+                master_path = project_dir / "master.wav"
+                sf.write(str(master_path), mixed, sr)
+                _log(job, f"💎 Master saved: {master_path.name}", "success")
+
+        job["stages"]["console"]["status"] = "completed"
+        job["stages"]["console"]["message"] = "Improved master ready"
+        job["progress"] = 100
+        job["status"] = "completed"
+        job["stage"] = "complete"
+
+        # Build result
+        files_info = {}
+        for name in ["original", "mix", "master"]:
+            path = project_dir / f"{name}.wav"
+            if path.exists():
+                files_info[name] = f"/api/reconstruct/audio/{improve_id}/{name}"
+
+        # Stem files
+        stem_list = []
+        if child_stems.exists():
+            for sf_path in sorted(child_stems.glob("*.wav")):
+                stem_list.append({
+                    "name": sf_path.stem,
+                    "url": f"/api/reconstruct/audio/{improve_id}/stems/{sf_path.stem}",
+                })
+
+        job["result"] = {
+            "analysis": analysis,  # inherit parent analysis
+            "stem_analysis": stem_analysis,
+            "files": {**files_info, "stems": stem_list},
+            "improvement": {
+                "feedback": feedback,
+                "plan": ai_plan,
+                "stems_modified": stems_modified,
+                "parent_job_id": parent_id,
+            },
+        }
+
+        _log(job, f"🎯 Directed Improve complete! {stems_modified} stems enhanced", "success")
+        _log(job, f"Expected: {ai_plan.get('expected_result', 'Improved track')}", "info")
+        _save_jobs()
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        job["status"] = "failed"
+        job["stage"] = "error"
+        for stage in job["stages"].values():
+            if stage["status"] == "running":
+                stage["status"] = "failed"
+                stage["message"] = str(e)[:100]
+        _log(job, f"❌ Improvement failed: {e}", "error")
+        _log(job, f"Traceback: {tb[-300:]}", "error")
+        _save_jobs()
 
 
 def _find_audio_file(project_dir: Path) -> Path | None:
