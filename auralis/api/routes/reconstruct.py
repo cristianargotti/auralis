@@ -2677,8 +2677,67 @@ Be creative, musical, and precise. Think like a professional producer who unders
                 _log(job, f"  → {c.get('section', '?')}: {', '.join(m.get('description', '') for m in c.get('modifications', []))}", "info")
             _log(job, f"🎯 Expected: {ai_plan.get('expected_result', '')}", "info")
         else:
-            ai_plan = {"changes": [], "mixing_adjustments": {}, "plan_title": "Improvement", "understanding": feedback}
-            _log(job, "⚠️ Gemini response wasn't structured — will apply general improvements", "warning")
+            # Gemini failed to return structured JSON — parse user feedback directly
+            _log(job, "⚠️ Gemini response wasn't structured — parsing feedback directly", "warning")
+            import re
+            parsed_changes = []
+            # Parse numbered items from feedback: "1. Title: Description ... (bars X-Y) [stems: a, b]"
+            items = re.split(r'\n\s*\d+\.\s+', "\n" + feedback)
+            for item in items[1:]:  # skip first empty split
+                title_match = re.match(r'^([^:]+):\s*(.*)', item, re.DOTALL)
+                title = title_match.group(1).strip() if title_match else "Improvement"
+                desc = title_match.group(2).strip() if title_match else item.strip()
+
+                # Extract bar numbers
+                bar_match = re.search(r'\(bars?\s+([\d\-,\s]+)\)', item)
+                bars = []
+                if bar_match:
+                    bar_text = bar_match.group(1)
+                    for part in re.split(r'[-,]', bar_text):
+                        part = part.strip()
+                        if part.isdigit():
+                            bars.append(int(part))
+
+                bar_start = min(bars) if bars else 1
+                bar_end = max(bars) if bars else 16
+
+                # Extract stems
+                stems_match = re.search(r'\[stems?:\s*([^\]]+)\]', item)
+                stems = []
+                if stems_match:
+                    stems = [s.strip() for s in stems_match.group(1).split(",")]
+
+                # Extract implementation details
+                impl_match = re.search(r'Implementation:\s*(.+?)(?:\(bars|\[stems|$)', item, re.DOTALL)
+                impl = impl_match.group(1).strip().rstrip('—. ') if impl_match else ""
+
+                parsed_changes.append({
+                    "section": f"bars_{bar_start}_to_{bar_end}",
+                    "bar_start": bar_start,
+                    "bar_end": bar_end,
+                    "modifications": [{
+                        "stem": s,
+                        "type": "effect",
+                        "description": f"{title}: {impl}" if impl else title,
+                        "params": {"effect": "general", "mix": 0.6},
+                    } for s in (stems or ["other"])],
+                })
+
+            if parsed_changes:
+                ai_plan = {
+                    "changes": parsed_changes,
+                    "mixing_adjustments": {},
+                    "plan_title": f"Direct Feedback: {len(parsed_changes)} improvements",
+                    "understanding": feedback[:200],
+                    "expected_result": "Track improved based on approved AI Critic proposals",
+                }
+                _log(job, f"📋 Parsed {len(parsed_changes)} changes from feedback text", "success")
+                for c in parsed_changes:
+                    stems_list = [m["stem"] for m in c["modifications"]]
+                    _log(job, f"  → {c['section']}: {', '.join(stems_list)}", "info")
+            else:
+                ai_plan = {"changes": [], "mixing_adjustments": {}, "plan_title": "Improvement", "understanding": feedback}
+                _log(job, "⚠️ Could not parse feedback into changes", "warning")
 
         # Always extract from ai_plan — guaranteed to exist in both branches
         changes = ai_plan.get("changes", [])

@@ -130,21 +130,54 @@ def generate(
             )
 
             if json_mode:
-                # Clean markdown code fences if present
+                # Multi-strategy JSON extraction
                 cleaned = text.strip()
-                if cleaned.startswith("```"):
-                    lines = cleaned.split("\n")
-                    cleaned = "\n".join(lines[1:-1]) if len(lines) > 2 else cleaned
+
+                # Strategy 1: Direct parse
                 try:
                     return json.loads(cleaned)
                 except json.JSONDecodeError:
-                    logger.warning(
-                        "gemini_json_parse_fail",
-                        model=model,
-                        text_preview=text[:200],
-                    )
-                    # Return raw text wrapped in dict
-                    return {"raw_response": text, "parse_error": True}
+                    pass
+
+                # Strategy 2: Strip markdown code fences
+                if cleaned.startswith("```"):
+                    lines = cleaned.split("\n")
+                    # Remove first line (```json) and last line (```)
+                    inner = "\n".join(lines[1:])
+                    if inner.rstrip().endswith("```"):
+                        inner = inner.rstrip()[:-3].rstrip()
+                    try:
+                        return json.loads(inner)
+                    except json.JSONDecodeError:
+                        pass
+
+                # Strategy 3: Find JSON object via braces
+                first_brace = cleaned.find("{")
+                last_brace = cleaned.rfind("}")
+                if first_brace != -1 and last_brace > first_brace:
+                    try:
+                        return json.loads(cleaned[first_brace:last_brace + 1])
+                    except json.JSONDecodeError:
+                        pass
+
+                # Strategy 4: Try fixing common issues (trailing commas)
+                import re
+                if first_brace != -1 and last_brace > first_brace:
+                    candidate = cleaned[first_brace:last_brace + 1]
+                    # Remove trailing commas before } or ]
+                    candidate = re.sub(r',\s*([}\]])', r'\1', candidate)
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        pass
+
+                logger.warning(
+                    "gemini_json_parse_fail",
+                    model=model,
+                    text_preview=text[:200],
+                )
+                # Return raw text wrapped in dict
+                return {"raw_response": text, "parse_error": True}
 
             return text
 
