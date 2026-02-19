@@ -2620,138 +2620,143 @@ async def _run_improvement(
 
         from auralis.brain.gemini_client import generate as gemini_generate
 
-        improvement_prompt = f"""You are AURALIS AI Producer — an expert music producer with deep knowledge of sound design, mixing, and arrangement.
+        improvement_prompt = f"""You are AURALIS AI Producer — an expert music producer who makes decisions based on data, not guesswork.
 
-## Original Track Analysis
+## Track DNA
+```json
 {json.dumps(track_context, indent=2, default=str)}
+```
 
-## User's Feedback / Approved Improvements
+## User Request
 "{feedback}"
 
 ## Your Task
-Create a precise improvement plan. For EACH change, you must choose the exact operation and parameters.
-You are the expert — decide the right values based on the track's BPM, genre, energy, and musical context.
+Create a PRECISE improvement plan. You are the producer — every parameter value must be **derived from the track's analysis data**, not arbitrary.
+
+## Decision Framework — How to Choose Parameter Values
+
+**Timing & Rhythm** (derive from BPM = {analysis.get('bpm', 120)}):
+- Delay time: Use musically quantized values. 1/4 note = {60000 / max(analysis.get('bpm', 120), 1):.0f}ms, 1/8 = {30000 / max(analysis.get('bpm', 120), 1):.0f}ms, dotted 1/8 = {45000 / max(analysis.get('bpm', 120), 1):.0f}ms
+- Tape stop: Faster BPM → shorter tape stop. Range: half a beat ({30000 / max(analysis.get('bpm', 120), 1):.0f}ms) to 2 beats ({120000 / max(analysis.get('bpm', 120), 1):.0f}ms)
+- Sidechain: Deeper for slower tracks, subtler for fast tracks
+
+**Frequency & Tone** (derive from spectral_summary):
+- Filter sweeps: Start from the stem's actual spectral centroid, sweep toward the target character
+- EQ: Cut below the stem's useful range, boost near its centroid for presence
+- Reverb: Longer decay for sparse/slow sections, shorter for dense/fast. Breakdown decay > Drop decay
+
+**Dynamics & Energy** (derive from energy_profile + RMS/peak data):
+- Compression: Lower threshold for quieter stems, higher ratio for punchier genres
+- Volume adjustments: Look at the stem's current RMS. If it's already loud, small adjustments suffice
+- Distortion drive: Match intensity to genre — minimal for melodic, aggressive for heavy
+
+**Spatial** (musical context):
+- Stereo width: Narrow during builds, wide on drops/choruses. Bass and kick always center
+- Reverb wet: More space in breakdowns (0.5-0.7), tight in drops (0.1-0.3)
 
 ## Available Operations
 
 ### Effects (type: "effect")
-Each effect has specific params YOU must set based on musical context:
-
-| effect_name | params | description |
+| effect_name | key params | use when |
 |---|---|---|
-| `shimmer_reverb` | `decay` (1-8s), `wet_mix` (0-1) | Octave-shifted ethereal reverb — breakdowns, intros |
-| `reverb` | `room_size` (0-1), `wet_mix` (0-1), `damping` (0-1) | Standard reverb — space and depth |
-| `delay` | `delay_time` (ms, e.g. 250-750), `feedback` (0-0.9), `wet_mix` (0-1) | Echo/repeat — rhythmic elements |
-| `sidechain` | `depth` (0-1) | Pumping effect synced to BPM — bass, pads |
-| `filter_sweep` | `start_hz` (20-20000), `end_hz` (20-20000), `filter_type` ("highpass"/"lowpass") | Automated filter — builds, drops |
-| `filter` | `cutoff` (Hz), `filter_type` ("lowpass"/"highpass"), `wet_mix` (0-1) | Static EQ filter |
-| `distortion` | `drive` (1-10), `type` ("soft_clip"/"tube"/"hard_clip"), `wet_mix` (0-1) | Saturation/warmth |
-| `compressor` | `threshold` (-40 to 0 dB), `ratio` (1-20) | Dynamics control — punch, glue |
-| `chorus` | `rate_hz` (0.1-5), `depth_ms` (1-10), `wet_mix` (0-1) | Ensemble/thicken |
-| `stereo_width` | `width` (0-2, where 1=unchanged, >1=wider, <1=narrower) | Spatial width |
-| `tape_stop` | `duration_ms` (100-2000) | Tape deceleration — transitions |
-| `pitch_riser` | `semitones` (1-24) | Gradual pitch rise — tension builds |
+| `shimmer_reverb` | `decay` (s), `wet_mix` (0-1) | Breakdowns, ethereal moments, transitions |
+| `reverb` | `room_size` (0-1), `wet_mix` (0-1), `damping` (0-1) | Adding space, depth |
+| `delay` | `delay_time` (ms — USE BPM-SYNCED VALUES), `feedback` (0-0.9), `wet_mix` (0-1) | Rhythmic texture, fills |
+| `sidechain` | `depth` (0-1) | Pump/groove on bass, pads |
+| `filter_sweep` | `start_hz`, `end_hz`, `filter_type` ("highpass"/"lowpass") | Builds, transitions, drops |
+| `filter` | `cutoff` (Hz), `filter_type`, `wet_mix` (0-1) | Tonal shaping, removing harshness |
+| `distortion` | `drive` (1-10), `type` ("soft_clip"/"tube"/"hard_clip"), `wet_mix` (0-1) | Warmth, grit, aggression |
+| `compressor` | `threshold` (dB), `ratio` (1-20) | Punch, glue, dynamics control |
+| `chorus` | `rate_hz` (0.1-5), `depth_ms` (1-10), `wet_mix` (0-1) | Thickening, ensemble |
+| `stereo_width` | `width` (0-2: <1=narrow, 1=unchanged, >1=wider) | Spatial shaping |
+| `tape_stop` | `duration_ms` (BPM-relative) | Transitions, dramatic pauses |
+| `pitch_riser` | `semitones` (1-24) | Tension builds |
 | `ring_mod` | `freq_hz` (50-2000), `wet_mix` (0-1) | Metallic/robotic textures |
 
 ### Volume (type: "volume")
-params: `db` (e.g. -6.0 to +6.0)
+params: `db` (-6.0 to +6.0 — small precise adjustments only)
 
 ### Arrangement (type: "arrangement")
 params: `action` — one of: "mute", "fade_in", "fade_out"
+USE THIS for silencing stems in specific bars (NOT stem_levels)
 
 ### Pitch Shift (type: "pitch_shift")
 params: `semitones` (-12 to +12)
 
 ### Generate New Audio (type: "generate")
-For adding NEW elements that don't exist in the track (percussion, textures, etc.)
-params: `prompt` (text description for AI audio generation, be specific about style/BPM/tone), `volume` (0-1)
+params: `prompt` (describe the sound precisely: style, BPM, tone, texture), `volume` (0-1)
+For adding NEW elements: percussion, textures, risers, impacts
 
 ### Texture (type: "texture")
-For atmospheric/ambient layers. params: `prompt` (descriptive), `volume` (0-1)
+params: `prompt` (descriptive), `volume` (0-1)
+For atmospheric/ambient layers
 
 ## Response JSON
 {{
-  "understanding": "Your interpretation of what to improve",
-  "plan_title": "Short name for this improvement plan",
+  "understanding": "Your interpretation of the request and what musical problem you're solving",
+  "plan_title": "Short name for this plan",
   "changes": [
     {{
-      "section": "intro | verse | chorus | drop | breakdown | outro | bridge",
+      "section": "intro | verse | chorus | drop | breakdown | outro | bridge | pre-breakdown | build",
       "bar_start": 0,
       "bar_end": 16,
       "stems_affected": ["drums", "bass", "vocals", "other"],
       "modifications": [
         {{
-          "type": "<operation type from above>",
-          "description": "What this does musically",
-          "params": {{ "<params as specified per operation>" }}
+          "type": "<operation type>",
+          "description": "What this does musically and WHY this parameter value",
+          "params": {{ "<params>" }}
         }}
       ],
-      "reasoning": "Why this change improves the track"
+      "reasoning": "Why this change improves the track — reference the analysis data"
     }}
   ],
   "mixing_adjustments": {{
-    "overall_description": "How the final mix should change",
+    "overall_description": "How the overall mix balance should change",
     "stem_levels": {{ "drums": 0.0, "bass": 0.0, "vocals": 0.0, "other": 0.0 }},
-    "master_processing": "Any changes to the master chain"
+    "master_processing": "Any master chain notes"
   }},
-
-  IMPORTANT about mixing_adjustments.stem_levels:
-  - These are GLOBAL mix-level dB adjustments applied to the ENTIRE track
-  - Range: -6.0 to +6.0 dB ONLY. Use 0.0 for no change
-  - Do NOT use extreme values like -99 to mute — use the "arrangement" mod_type with action "mute" in the changes array instead
-  - stem_levels are for subtle balance tweaks, NOT for muting or silencing stems
-  - If you want to mute a stem for specific bars, use a change with mod_type="arrangement", NOT stem_levels
-  "expected_result": "What the user should hear differently"
+  "expected_result": "What the listener should hear differently"
 }}
 
-## CREATIVE FREEDOM — Section Redesign
-You are not limited to tweaking parameters. You have FULL CREATIVE CONTROL to redesign entire sections.
-You can COMBINE multiple operations on the same section to completely transform it.
-
-### Redesign Patterns
-Think like a top producer. Here are composition-level patterns you can use:
-
-**Redesign an Intro:**
-- Mute drums bars 1-4 → fade_in drums bars 5-8 → shimmer_reverb on other bars 1-8 → filter_sweep highpass 200→8000Hz on other bars 1-8 → generate "ambient atmospheric pad texture" bars 1-8
-
-**Create a Tension Build:**
-- pitch_riser on other → filter_sweep lowpass opening → volume +3dB progressive → sidechain on bass → generate "white noise riser" → tape_stop at the last beat before drop
-
-**Redesign a Transition:**
-- fade_out current section stems → tape_stop on drums → shimmer_reverb with long tail on other → mute bass for 2 bars → generate "impact hit, cinematic, {analysis.get('bpm', 120)}bpm" → fade_in new section stems
-
-**Breakdown Transformation:**
-- mute drums → pitch_shift other -5 semitones → stereo_width 0.5 (narrow) → shimmer_reverb 6s decay → volume -4dB on bass → generate "ethereal vocal chop, atmospheric, {analysis.get('bpm', 120)}bpm"
-
-**Drop Enhancement:**
-- stereo_width 1.8 (wide) → sidechain 0.85 on bass → compressor (punch) on drums → distortion tube on bass → filter sweep lowpass slam open
-
-You can apply AS MANY modifications as needed per section. Use multiple changes targeting the same or overlapping bar ranges. Don't be conservative — be bold and creative.
-
 ## CRITICAL RULES
-- The ONLY valid stem names are: "drums", "bass", "vocals", "other"
-- "other" = ALL melodic/harmonic: synths, pads, keys, guitars, leads, FX
-- YOU decide the exact parameter values — choose them based on BPM ({analysis.get('bpm', 120)}), genre, energy level
-- Be precise: if the section is a breakdown, use longer reverb decay. If it's a drop, use shorter, punchier settings
-- Don't use generic values — think about what a top producer would set for THIS specific track
-- For "generate" type: write the prompt as if describing the sound to a musician (e.g. "Tribal woodblock pattern, syncopated, {analysis.get('bpm', 120)}bpm, dry")
-- You CAN redesign entire sections — don't just add effects, RETHINK the arrangement if the feedback calls for it
-- Use multiple modifications per change when sections need comprehensive transformation
+
+**stems_affected** MUST be present in every change — it's a list of which stems get the modifications.
+Valid stems: "drums", "bass", "vocals", "other" (other = synths, pads, keys, leads, FX, guitars)
+
+**mixing_adjustments.stem_levels** are GLOBAL mix-level dB tweaks for the ENTIRE track.
+- Range: -6.0 to +6.0 ONLY. Use 0.0 when no change needed
+- NEVER use extreme values (-99, -inf) — if you need to silence a stem for specific bars, use arrangement type with "mute" action in the changes array
+- These are for subtle mix balance, NOT for muting
+
+**Anti-Patterns — Do NOT do these:**
+- ❌ Setting stem_levels to silence an entire stem (use per-bar "mute" instead)
+- ❌ Using arbitrary parameter values without musical justification
+- ❌ Muting + Generate in the same change without considering Generate might fail
+- ❌ Using delay times that aren't BPM-synced
+- ❌ Applying effects to bars beyond the track's actual length
+
+**Pro-Patterns — DO these:**
+- ✅ Every parameter justified by the track's BPM, spectral data, or energy profile
+- ✅ Multiple complementary modifications per section for cohesive transformations
+- ✅ If muting a stem, combine with arrangement mods (fade_out before mute, or fade_in after)
+- ✅ Use the spectral_summary to set filter frequencies at musically relevant points
+- ✅ Reference specific analysis values in your reasoning
 """
 
         ai_plan = gemini_generate(
             prompt=improvement_prompt,
             system_prompt=(
                 "You are AURALIS AI Producer — a world-class music producer and sound designer. "
-                "You don't just tweak — you REDESIGN. You have full creative freedom to transform "
-                "any section of the track. You can mute elements, generate new ones, reshape transitions, "
-                "and build entirely new sonic narratives. Your decisions are bold, musical, and precise. "
-                "Every parameter you choose is intentional — driven by the track's BPM, genre, energy, "
-                "and the user's artistic vision. Think at the compositional level, not just the mixing level."
+                "You make every decision based on the track's analysis data: BPM, spectral content, "
+                "energy profile, and dynamic range. You never guess parameter values — you derive them "
+                "from the music. Your changes are bold but musically justified. "
+                "Think at the compositional level, not just the mixing level. "
+                "Always include stems_affected in every change."
             ),
             json_mode=True,
-            max_tokens=4096,
-            temperature=0.6,
+            max_tokens=8192,
+            temperature=0.5,
         )
 
         if isinstance(ai_plan, dict) and not ai_plan.get("parse_error"):

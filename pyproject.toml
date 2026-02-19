@@ -38,6 +38,8 @@ dependencies = [
     "bcrypt>=4.0",
     # AWS (GPU management)
     "boto3>=1.34",
+    # Audio generation (Replicate API)
+    "replicate>=1.0",
 ]
 
 [project.optional-dependencies]
