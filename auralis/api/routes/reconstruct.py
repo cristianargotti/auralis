@@ -3018,9 +3018,13 @@ Be creative, musical, and precise. Think like a professional producer who unders
                     "url": f"/api/reconstruct/audio/{improve_id}/stems/{sf_path.stem}",
                 })
 
+        # Inherit ALL parent result data so UI shows full insights
+        parent_result = result.copy() if result else {}
+        parent_result.pop("files", None)  # will be replaced with child files
+
         job["result"] = {
-            "analysis": analysis,  # inherit parent analysis
-            "stem_analysis": stem_analysis,
+            **parent_result,  # brain_report, qc, xray_analysis, plan, analysis, etc.
+            "stem_analysis": stem_analysis,  # may have been updated
             "files": {**files_info, "stems": stem_list},
             "improvement": {
                 "feedback": feedback,
