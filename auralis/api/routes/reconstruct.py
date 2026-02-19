@@ -2903,17 +2903,20 @@ Be creative, musical, and precise. Think like a professional producer who unders
         mixing_adj = ai_plan.get("mixing_adjustments", {})
         stem_levels = mixing_adj.get("stem_levels", {})
 
-        # Mix all stems together
+        # Mix all stems together in STEREO
         all_stems = list(child_stems.glob("*.wav")) if child_stems.exists() else []
         if all_stems:
-            # Load all stems
             mixed = None
             max_len = 0
 
             for stem_file in all_stems:
                 try:
-                    y_stem, _ = librosa.load(str(stem_file), sr=sr, mono=True)
+                    y_stem, _ = librosa.load(str(stem_file), sr=sr, mono=False)
                     stem_name = stem_file.stem
+
+                    # Ensure stereo (2D array with shape [channels, samples])
+                    if y_stem.ndim == 1:
+                        y_stem = np.stack([y_stem, y_stem])  # mono → stereo
 
                     # Apply AI-decided stem level adjustment
                     level_db = float(stem_levels.get(stem_name, 0.0))
@@ -2923,14 +2926,14 @@ Be creative, musical, and precise. Think like a professional producer who unders
 
                     if mixed is None:
                         mixed = y_stem.copy()
-                        max_len = len(y_stem)
+                        max_len = y_stem.shape[1]
                     else:
-                        # Pad shorter array
-                        if len(y_stem) > max_len:
-                            mixed = np.pad(mixed, (0, len(y_stem) - max_len))
-                            max_len = len(y_stem)
-                        elif len(y_stem) < max_len:
-                            y_stem = np.pad(y_stem, (0, max_len - len(y_stem)))
+                        cur_len = y_stem.shape[1]
+                        if cur_len > max_len:
+                            mixed = np.pad(mixed, ((0, 0), (0, cur_len - max_len)))
+                            max_len = cur_len
+                        elif cur_len < max_len:
+                            y_stem = np.pad(y_stem, ((0, 0), (0, max_len - cur_len)))
                         mixed += y_stem
                 except Exception as e:
                     _log(job, f"  ⚠️ Error mixing {stem_file.name}: {e}", "warning")
@@ -2940,29 +2943,58 @@ Be creative, musical, and precise. Think like a professional producer who unders
                 peak = np.max(np.abs(mixed))
                 if peak > 0.95:
                     mixed = mixed * 0.95 / peak
-                    _log(job, f"  📊 Normalized peak to -0.5dB", "info")
+                    _log(job, "  📊 Normalized peak to -0.5dB", "info")
 
-                # Save mix
+                # Save mix (stereo, interleaved)
                 mix_path = project_dir / "mix.wav"
-                sf.write(str(mix_path), mixed, sr)
+                sf.write(str(mix_path), mixed.T, sr)
                 _log(job, f"💿 Mix saved: {mix_path.name}", "success")
 
-                # Simple mastering: gentle compression + limiter
-                # Soft-knee compressor
-                threshold = 0.5
-                ratio = 3.0
-                above = np.abs(mixed) > threshold
-                mixed[above] = np.sign(mixed[above]) * (
-                    threshold + (np.abs(mixed[above]) - threshold) / ratio
-                )
-                # Final limiter
-                peak = np.max(np.abs(mixed))
-                if peak > 0:
-                    mixed = mixed * 0.92 / peak
-
+                # Full mastering chain — same as original pipeline
                 master_path = project_dir / "master.wav"
-                sf.write(str(master_path), mixed, sr)
-                _log(job, f"💎 Master saved: {master_path.name}", "success")
+                bpm_val = float(analysis.get("bpm", 120))
+                target_lufs = -8.0
+
+                try:
+                    import multiprocessing
+                    brain_plan_dict = None
+                    brain = result.get("brain_report")
+                    if brain:
+                        brain_plan_dict = {
+                            k: brain[k] for k in brain
+                            if isinstance(brain[k], (str, int, float, bool, list, dict, type(None)))
+                        }
+
+                    p = multiprocessing.Process(
+                        target=_subprocess_master,
+                        args=(str(mix_path), str(master_path), target_lufs, bpm_val, brain_plan_dict),
+                    )
+                    p.start()
+                    p.join(timeout=300)
+
+                    if p.is_alive():
+                        p.terminate()
+                        raise RuntimeError("Mastering subprocess timed out")
+
+                    if not master_path.exists():
+                        raise RuntimeError("Mastering subprocess did not produce output")
+
+                    _log(job, f"💎 Master saved: {master_path.name} (full chain, {target_lufs} LUFS)", "success")
+                except Exception as e:
+                    _log(job, f"⚠️ Full mastering failed ({e}), using basic master", "warning")
+                    # Fallback: basic mastering
+                    threshold = 0.5
+                    ratio = 3.0
+                    master_audio = mixed.copy()
+                    above = np.abs(master_audio) > threshold
+                    master_audio[above] = np.sign(master_audio[above]) * (
+                        threshold + (np.abs(master_audio[above]) - threshold) / ratio
+                    )
+                    peak = np.max(np.abs(master_audio))
+                    if peak > 0:
+                        master_audio = master_audio * 0.92 / peak
+                    sf.write(str(master_path), master_audio.T, sr)
+                    _log(job, f"💎 Master saved: {master_path.name} (basic fallback)", "success")
 
         job["stages"]["console"]["status"] = "completed"
         job["stages"]["console"]["message"] = "Improved master ready"
